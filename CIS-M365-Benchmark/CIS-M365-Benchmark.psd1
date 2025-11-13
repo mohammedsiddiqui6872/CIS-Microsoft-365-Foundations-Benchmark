@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.3'
+ModuleVersion = '2.3.4'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,12 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.4 - Cleanup Release
+
+### Changes
+- Removed test/preview script from repository to keep package clean
+- Production-ready files only in PowerShell Gallery distribution
+
 ## v2.3.3 - Enhanced HTML Reports with Floating Action Buttons
 
 ### Major Enhancement - Modern Interactive Report Design
