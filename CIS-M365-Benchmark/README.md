@@ -5,6 +5,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![CIS Benchmark](https://img.shields.io/badge/CIS%20Benchmark-v5.0.0-orange.svg)](https://www.cisecurity.org/)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg)](https://buymeacoffee.com/mohammedsiddiqui)
 
 A comprehensive PowerShell script that audits your Microsoft 365 environment against **all 130 CIS Microsoft 365 Foundations Benchmark v5.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
@@ -179,6 +180,12 @@ The script performs comprehensive checks across **9 major sections**:
 # Install the module from PowerShell Gallery
 Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser
 
+# Update to latest version (recommended to always use latest)
+Update-Module -Name CIS-M365-Benchmark -Force
+
+# Verify installation
+Get-Module -ListAvailable CIS-M365-Benchmark
+
 # Install required dependencies
 Install-Module -Name Microsoft.Graph -Scope CurrentUser -Force
 Install-Module -Name ExchangeOnlineManagement -Scope CurrentUser -Force
@@ -186,6 +193,14 @@ Install-Module -Name Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser -
 Install-Module -Name MicrosoftTeams -Scope CurrentUser -Force
 Install-Module -Name MSOnline -Scope CurrentUser -Force  # Legacy module (optional)
 ```
+
+### 💖 Support This Project
+
+If this toolkit has helped improve your security compliance, consider supporting its development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support%20This%20Project-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
+
+Your support helps maintain and improve this toolkit with new CIS Benchmark updates, features, and compatibility with the latest Microsoft 365 controls!
 
 ### Option 2: Clone from GitHub
 
@@ -387,19 +402,24 @@ Reports saved to:
 - ✅ **Audit Trail**: All checks are logged with timestamps
 - ⚠️ **Sensitive Data**: Reports may contain tenant configuration details - store securely
 
-## 📝 License
+## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is provided as-is under the MIT License for security assessment purposes. See the [LICENSE](LICENSE) file for details.
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+We welcome contributions! Here's how you can help:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+### Report Issues
+Found a bug or have a feature request? [Open an issue](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues)
+
+### Submit Feedback
+Have suggestions for improvements? [Share your feedback](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues/new)
+
+### Support This Project
+If this toolkit has helped improve your security compliance:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=for-the-badge)](https://buymeacoffee.com/mohammedsiddiqui)
 
 ## 📚 References
 
@@ -407,15 +427,29 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - [Microsoft Graph API Documentation](https://docs.microsoft.com/en-us/graph/)
 - [Microsoft 365 Security Best Practices](https://docs.microsoft.com/en-us/microsoft-365/security/)
 
-## 👥 Authors
+## 👨‍💻 Author
 
-- **Mohammed Siddiqui** - [GitHub](https://github.com/mohammedsiddiqui6872)
+**Mohammed Siddiqui**
+- 🐙 GitHub: [@mohammedsiddiqui6872](https://github.com/mohammedsiddiqui6872)
+- 💼 LinkedIn: [Let's Chat!](https://www.linkedin.com/in/mohammedsiddiqui6872/)
+- ☕ Support: [Buy Me a Coffee](https://buymeacoffee.com/mohammedsiddiqui)
 
 ## 🙏 Acknowledgments
 
 - CIS (Center for Internet Security) for the comprehensive benchmark
 - Microsoft for providing Graph API and PowerShell modules
 - The Microsoft 365 security community
+
+## 🔗 Links
+
+- 📦 [PowerShell Gallery](https://www.powershellgallery.com/packages/CIS-M365-Benchmark)
+- 🐙 [GitHub Repository](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0)
+- 🐛 [Report Issues](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues)
+- 💬 [Submit Feedback](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues/new)
+- 👔 [LinkedIn](https://www.linkedin.com/in/mohammedsiddiqui6872/)
+- ☕ [Buy Me a Coffee](https://buymeacoffee.com/mohammedsiddiqui)
+
+---
 
 ## 📞 Support
 
@@ -425,6 +459,16 @@ For issues, questions, or suggestions:
 
 ---
 
+## ⚠️ Disclaimer
+
+This toolkit is not affiliated with or endorsed by Microsoft Corporation or CIS (Center for Internet Security). Microsoft, Microsoft 365, Azure Active Directory, and related trademarks are property of Microsoft Corporation. CIS and CIS Benchmarks are trademarks of CIS.
+
+This script is provided as-is for compliance assessment purposes. Always test in a non-production environment first. The authors are not responsible for any issues that may arise from using this script.
+
+---
+
 **⭐ If you find this tool helpful, please consider giving it a star!**
 
-**📢 Disclaimer**: This script is provided as-is for compliance assessment purposes. Always test in a non-production environment first. The authors are not responsible for any issues that may arise from using this script.
+**Generated with** ❤️ **for better security compliance**
+
+© 2025 Mohammed Siddiqui. All rights reserved.
