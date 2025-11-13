@@ -1,0 +1,59 @@
+# CIS M365 Compliance Checker - Git Ignore
+
+# Generated Reports
+*.html
+*.csv
+CIS-M365-Compliance-Report_*
+
+# PowerShell Session Files
+*.pssc
+*.psd1.backup
+
+# Logs
+*.log
+logs/
+
+# Credentials and Secrets
+*.credential
+*.secret
+credentials/
+secrets/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# PowerShell
+*.ps1xml
+
+# Temporary Files
+*.tmp
+*.temp
+~$*
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Backup files
+*.bak
+*.backup
+
+# Test files
+test_*.ps1
+Test_*.ps1
+
+# Publishing scripts
+install-nuget.ps1
+test-publish.ps1
+publish-module.ps1

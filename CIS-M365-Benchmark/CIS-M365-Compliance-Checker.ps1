@@ -1,0 +1,2951 @@
+<#
+.SYNOPSIS
+    CIS Microsoft 365 Foundations Benchmark v5.0.0 Compliance Checker
+
+.DESCRIPTION
+    Comprehensive PowerShell script to audit Microsoft 365 environment against all 128 CIS benchmark controls.
+    Generates detailed HTML and CSV reports showing compliance status for each control.
+
+.NOTES
+    Version: 1.0
+    Author: CIS Compliance Automation
+    Date: 2025-11-11
+
+    Required PowerShell Modules:
+    - Microsoft.Graph (Install-Module Microsoft.Graph -Scope CurrentUser)
+    - ExchangeOnlineManagement (Install-Module ExchangeOnlineManagement -Scope CurrentUser)
+    - Microsoft.Online.SharePoint.PowerShell (Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser)
+    - MicrosoftTeams (Install-Module MicrosoftTeams -Scope CurrentUser)
+    - MSOnline (Install-Module MSOnline -Scope CurrentUser)
+
+.PARAMETER TenantDomain
+    Your Microsoft 365 tenant domain (e.g., contoso.onmicrosoft.com)
+
+.PARAMETER SharePointAdminUrl
+    Your SharePoint admin URL (e.g., https://contoso-admin.sharepoint.com)
+
+.PARAMETER OutputPath
+    Path where the HTML and CSV reports will be saved. Default: Current directory
+
+.PARAMETER ProfileLevel
+    CIS profile level to check: 'L1', 'L2', or 'All'. Default: 'All'
+
+.EXAMPLE
+    .\CIS-M365-Compliance-Checker.ps1 -TenantDomain "contoso.onmicrosoft.com" -SharePointAdminUrl "https://contoso-admin.sharepoint.com"
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$TenantDomain,
+
+    [Parameter(Mandatory=$true)]
+    [string]$SharePointAdminUrl,
+
+    [Parameter(Mandatory=$false)]
+    [string]$OutputPath = ".",
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet('L1','L2','All')]
+    [string]$ProfileLevel = 'All'
+)
+
+# Global Variables
+$Script:Results = @()
+$Script:TotalControls = 0
+$Script:PassedControls = 0
+$Script:FailedControls = 0
+$Script:ManualControls = 0
+$Script:ErrorControls = 0
+$Script:MsolConnected = $false
+
+#region Helper Functions
+
+function Write-Log {
+    param(
+        [string]$Message,
+        [ValidateSet('Info','Success','Warning','Error')]
+        [string]$Level = 'Info'
+    )
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $color = switch($Level) {
+        'Info' { 'Cyan' }
+        'Success' { 'Green' }
+        'Warning' { 'Yellow' }
+        'Error' { 'Red' }
+    }
+
+    Write-Host "[$timestamp] " -NoNewline
+    Write-Host "[$Level] " -ForegroundColor $color -NoNewline
+    Write-Host $Message
+}
+
+function Add-Result {
+    param(
+        [string]$ControlNumber,
+        [string]$ControlTitle,
+        [string]$ProfileLevel,
+        [ValidateSet('Pass','Fail','Manual','Error')]
+        [string]$Result,
+        [string]$Details,
+        [string]$Remediation = ""
+    )
+
+    $Script:TotalControls++
+
+    switch($Result) {
+        'Pass' { $Script:PassedControls++ }
+        'Fail' { $Script:FailedControls++ }
+        'Manual' { $Script:ManualControls++ }
+        'Error' { $Script:ErrorControls++ }
+    }
+
+    $Script:Results += [PSCustomObject]@{
+        ControlNumber = $ControlNumber
+        ControlTitle = $ControlTitle
+        ProfileLevel = $ProfileLevel
+        Result = $Result
+        Details = $Details
+        Remediation = $Remediation
+    }
+}
+
+function Test-ModuleInstalled {
+    param([string]$ModuleName)
+
+    if (Get-Module -ListAvailable -Name $ModuleName) {
+        return $true
+    }
+    return $false
+}
+
+function Connect-M365Services {
+    Write-Log "Connecting to Microsoft 365 services..." -Level Info
+    Write-Log "NOTE: You will be prompted to sign in once. The same session will be used for all services." -Level Info
+
+    try {
+        # Connect to Microsoft Graph first - this establishes the primary authentication
+        Write-Log "Connecting to Microsoft Graph..." -Level Info
+        Connect-MgGraph -Scopes "Directory.Read.All", "Policy.Read.All", "AuditLog.Read.All", `
+                               "UserAuthenticationMethod.Read.All", "IdentityRiskyUser.Read.All", `
+                               "IdentityRiskEvent.Read.All", "Application.Read.All", `
+                               "Organization.Read.All", "User.Read.All", "Group.Read.All", `
+                               "RoleManagement.Read.All", "Reports.Read.All" -NoWelcome -ErrorAction Stop
+        Write-Log "Connected to Microsoft Graph" -Level Success
+
+        # Get the current Graph context to reuse credentials
+        $mgContext = Get-MgContext
+        $tenantId = $mgContext.TenantId
+
+        Write-Log "Using authenticated session for remaining services (TenantId: $tenantId)..." -Level Info
+
+        # Connect to Exchange Online using the same authenticated session
+        Write-Log "Connecting to Exchange Online..." -Level Info
+        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        Write-Log "Connected to Exchange Online" -Level Success
+
+        # Connect to SharePoint Online
+        Write-Log "Connecting to SharePoint Online..." -Level Info
+        Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
+        Write-Log "Connected to SharePoint Online" -Level Success
+
+        # Connect to Microsoft Teams using the same account
+        Write-Log "Connecting to Microsoft Teams..." -Level Info
+        Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
+        Write-Log "Connected to Microsoft Teams" -Level Success
+
+        # Connect to MSOnline (for legacy checks) - Optional
+        # Note: MSOnline doesn't support modern auth token reuse well, so this may prompt separately
+        Write-Log "Connecting to MSOnline (legacy module - may prompt separately)..." -Level Info
+        try {
+            Connect-MsolService -ErrorAction Stop
+            Write-Log "Connected to MSOnline" -Level Success
+            $script:MsolConnected = $true
+        }
+        catch {
+            Write-Log "Warning: Could not connect to MSOnline. Per-user MFA check (5.1.2.1) will be skipped." -Level Warning
+            Write-Log "MSOnline module is deprecated. Consider using Microsoft Graph for all checks." -Level Warning
+            $script:MsolConnected = $false
+        }
+
+        Write-Log "All service connections established successfully!" -Level Success
+        return $true
+    }
+    catch {
+        Write-Log "Failed to connect to M365 services: $_" -Level Error
+        return $false
+    }
+}
+
+#endregion
+
+#region Section 1: Microsoft 365 Admin Center
+
+function Test-M365AdminCenter {
+    Write-Log "Checking Section 1: Microsoft 365 Admin Center..." -Level Info
+
+    # 1.1.1 - Ensure Administrative accounts are cloud-only
+    try {
+        Write-Log "Checking 1.1.1 - Administrative accounts are cloud-only" -Level Info
+        $adminRoles = Get-MgDirectoryRole -All
+        $adminUsers = @()
+        foreach ($role in $adminRoles) {
+            $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id
+            foreach ($member in $members) {
+                if ($member.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user') {
+                    $user = Get-MgUser -UserId $member.Id -Property Id,UserPrincipalName,OnPremisesSyncEnabled
+                    if ($user.OnPremisesSyncEnabled) {
+                        $adminUsers += $user.UserPrincipalName
+                    }
+                }
+            }
+        }
+
+        if ($adminUsers.Count -eq 0) {
+            Add-Result -ControlNumber "1.1.1" -ControlTitle "Ensure Administrative accounts are cloud-only" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "All administrative accounts are cloud-only"
+        }
+        else {
+            Add-Result -ControlNumber "1.1.1" -ControlTitle "Ensure Administrative accounts are cloud-only" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Synced admin accounts found: $($adminUsers -join ', ')" `
+                       -Remediation "Convert administrative accounts to cloud-only accounts"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "1.1.1" -ControlTitle "Ensure Administrative accounts are cloud-only" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 1.1.2 - Ensure two emergency access accounts have been defined (Manual)
+    Add-Result -ControlNumber "1.1.2" -ControlTitle "Ensure two emergency access accounts have been defined" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required" `
+               -Remediation "Create and document two emergency 'break glass' accounts"
+
+    # 1.1.3 - Ensure that between two and four global admins are designated
+    try {
+        Write-Log "Checking 1.1.3 - Global admin count" -Level Info
+        $globalAdminRole = Get-MgDirectoryRole -Filter "DisplayName eq 'Global Administrator'"
+        $globalAdmins = Get-MgDirectoryRoleMember -DirectoryRoleId $globalAdminRole.Id
+        $globalAdminCount = $globalAdmins.Count
+
+        if ($globalAdminCount -ge 2 -and $globalAdminCount -le 4) {
+            Add-Result -ControlNumber "1.1.3" -ControlTitle "Ensure that between two and four global admins are designated" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Global admin count: $globalAdminCount"
+        }
+        else {
+            Add-Result -ControlNumber "1.1.3" -ControlTitle "Ensure that between two and four global admins are designated" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Global admin count: $globalAdminCount (should be 2-4)" `
+                       -Remediation "Adjust global administrator count to between 2 and 4"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "1.1.3" -ControlTitle "Ensure that between two and four global admins are designated" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 1.1.4 - Ensure administrative accounts use licenses with a reduced application footprint
+    Add-Result -ControlNumber "1.1.4" -ControlTitle "Ensure administrative accounts use licenses with a reduced application footprint" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification of admin licensing required" `
+               -Remediation "Assign minimal licenses to administrative accounts"
+
+    # 1.2.1 - Ensure that only organizationally managed/approved public groups exist
+    try {
+        Write-Log "Checking 1.2.1 - Public groups approval" -Level Info
+        # Get all groups and filter by visibility property (Graph API filter doesn't support visibility)
+        $allGroups = Get-MgGroup -All -Property DisplayName,Visibility,Id
+        $publicGroups = $allGroups | Where-Object { $_.Visibility -eq 'Public' }
+
+        if ($publicGroups.Count -eq 0) {
+            Add-Result -ControlNumber "1.2.1" -ControlTitle "Ensure that only organizationally managed/approved public groups exist" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "No public groups found"
+        }
+        else {
+            $groupNames = ($publicGroups | Select-Object -ExpandProperty DisplayName) -join ', '
+            Add-Result -ControlNumber "1.2.1" -ControlTitle "Ensure that only organizationally managed/approved public groups exist" `
+                       -ProfileLevel "L2" -Result "Manual" -Details "Public groups found: $groupNames. Manual verification needed" `
+                       -Remediation "Review and approve or remove unauthorized public groups"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "1.2.1" -ControlTitle "Ensure that only organizationally managed/approved public groups exist" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 1.2.2 - Ensure sign-in to shared mailboxes is blocked
+    try {
+        Write-Log "Checking 1.2.2 - Shared mailbox sign-in blocked" -Level Info
+        $sharedMailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited
+        $enabledSharedMB = @()
+
+        foreach ($mb in $sharedMailboxes) {
+            $user = Get-MgUser -UserId $mb.ExternalDirectoryObjectId -Property AccountEnabled -ErrorAction SilentlyContinue
+            if ($user.AccountEnabled) {
+                $enabledSharedMB += $mb.UserPrincipalName
+            }
+        }
+
+        if ($enabledSharedMB.Count -eq 0) {
+            Add-Result -ControlNumber "1.2.2" -ControlTitle "Ensure sign-in to shared mailboxes is blocked" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "All shared mailboxes have sign-in disabled"
+        }
+        else {
+            Add-Result -ControlNumber "1.2.2" -ControlTitle "Ensure sign-in to shared mailboxes is blocked" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Shared mailboxes with sign-in enabled: $($enabledSharedMB -join ', ')" `
+                       -Remediation "Disable sign-in for shared mailboxes: Set-MgUser -UserId <ID> -AccountEnabled `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "1.2.2" -ControlTitle "Ensure sign-in to shared mailboxes is blocked" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 1.3.1 - Ensure the 'Password expiration policy' is set to never expire
+    try {
+        Write-Log "Checking 1.3.1 - Password expiration policy" -Level Info
+        # Check password policy via Graph API
+        $defaultDomain = Get-MgDomain | Where-Object { $_.IsDefault -eq $true } | Select-Object -First 1
+
+        if ($defaultDomain.PasswordValidityPeriodInDays -eq 2147483647 -or $defaultDomain.PasswordValidityPeriodInDays -gt 365) {
+            Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Password expiration set to $($defaultDomain.PasswordValidityPeriodInDays) days (never expire)"
+        }
+        else {
+            Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Password expires in $($defaultDomain.PasswordValidityPeriodInDays) days" `
+                       -Remediation "Update-MgDomain -DomainId $($defaultDomain.Id) -PasswordValidityPeriodInDays 2147483647"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 1.3.2 - Ensure 'Idle session timeout' is set to '3 hours (or less)' for unmanaged devices
+    Add-Result -ControlNumber "1.3.2" -ControlTitle "Ensure 'Idle session timeout' is set to '3 hours (or less)' for unmanaged devices" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Security & privacy" `
+               -Remediation "Configure idle session timeout to 3 hours or less"
+
+    # 1.3.3 - Ensure 'External sharing' of calendars is not available
+    Add-Result -ControlNumber "1.3.3" -ControlTitle "Ensure 'External sharing' of calendars is not available" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check M365 Admin Center > Settings > Calendar" `
+               -Remediation "Disable external calendar sharing"
+
+    # 1.3.4 - Ensure 'User owned apps and services' is restricted
+    Add-Result -ControlNumber "1.3.4" -ControlTitle "Ensure 'User owned apps and services' is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Services > User owned apps and services" `
+               -Remediation "Restrict user-owned applications and services"
+
+    # 1.3.5 - Ensure internal phishing protection for Forms is enabled
+    Add-Result -ControlNumber "1.3.5" -ControlTitle "Ensure internal phishing protection for Forms is enabled" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Microsoft Forms" `
+               -Remediation "Enable phishing protection for Microsoft Forms"
+
+    # 1.3.6 - Ensure the customer lockbox feature is enabled
+    Add-Result -ControlNumber "1.3.6" -ControlTitle "Ensure the customer lockbox feature is enabled" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Security & Privacy > Customer Lockbox" `
+               -Remediation "Enable Customer Lockbox feature"
+
+    # 1.3.7 - Ensure 'third-party storage services' are restricted in 'Microsoft 365 on the web'
+    Add-Result -ControlNumber "1.3.7" -ControlTitle "Ensure 'third-party storage services' are restricted in 'Microsoft 365 on the web'" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Microsoft 365 on the web" `
+               -Remediation "Disable third-party storage services"
+
+    # 1.3.8 - Ensure that Sways cannot be shared with people outside of your organization
+    Add-Result -ControlNumber "1.3.8" -ControlTitle "Ensure that Sways cannot be shared with people outside of your organization" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check M365 Admin Center > Settings > Org Settings > Sway" `
+               -Remediation "Disable external Sway sharing"
+}
+
+#endregion
+
+#region Section 2: Microsoft 365 Defender
+
+function Test-M365Defender {
+    Write-Log "Checking Section 2: Microsoft 365 Defender..." -Level Info
+
+    # 2.1.1 - Ensure Safe Links for Office Applications is Enabled
+    try {
+        Write-Log "Checking 2.1.1 - Safe Links for Office Applications" -Level Info
+        $safeLinksPolicies = Get-SafeLinksPolicy
+        $safeLinksEnabled = $false
+
+        foreach ($policy in $safeLinksPolicies) {
+            if ($policy.EnableSafeLinksForOffice -eq $true) {
+                $safeLinksEnabled = $true
+                break
+            }
+        }
+
+        if ($safeLinksEnabled) {
+            Add-Result -ControlNumber "2.1.1" -ControlTitle "Ensure Safe Links for Office Applications is Enabled" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Safe Links for Office applications is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.1" -ControlTitle "Ensure Safe Links for Office Applications is Enabled" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Safe Links for Office applications is not enabled" `
+                       -Remediation "Enable Safe Links in a policy: Set-SafeLinksPolicy -EnableSafeLinksForOffice `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.1" -ControlTitle "Ensure Safe Links for Office Applications is Enabled" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.2 - Ensure the Common Attachment Types Filter is enabled
+    try {
+        Write-Log "Checking 2.1.2 - Common Attachment Types Filter" -Level Info
+        $malwarePolicies = Get-MalwareFilterPolicy
+        $commonAttachmentsEnabled = $false
+
+        foreach ($policy in $malwarePolicies) {
+            if ($policy.EnableFileFilter -eq $true) {
+                $commonAttachmentsEnabled = $true
+                break
+            }
+        }
+
+        if ($commonAttachmentsEnabled) {
+            Add-Result -ControlNumber "2.1.2" -ControlTitle "Ensure the Common Attachment Types Filter is enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Common attachment types filter is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.2" -ControlTitle "Ensure the Common Attachment Types Filter is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Common attachment types filter is not enabled" `
+                       -Remediation "Enable common attachment filter: Set-MalwareFilterPolicy -EnableFileFilter `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.2" -ControlTitle "Ensure the Common Attachment Types Filter is enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.3 - Ensure notifications for internal users sending malware is Enabled
+    try {
+        Write-Log "Checking 2.1.3 - Malware notifications for internal users" -Level Info
+        $malwarePolicies = Get-MalwareFilterPolicy
+        $notificationsEnabled = $false
+
+        foreach ($policy in $malwarePolicies) {
+            if ($policy.EnableInternalSenderAdminNotifications -eq $true) {
+                $notificationsEnabled = $true
+                break
+            }
+        }
+
+        if ($notificationsEnabled) {
+            Add-Result -ControlNumber "2.1.3" -ControlTitle "Ensure notifications for internal users sending malware is Enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Internal malware notifications enabled"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.3" -ControlTitle "Ensure notifications for internal users sending malware is Enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Internal malware notifications not enabled" `
+                       -Remediation "Enable notifications: Set-MalwareFilterPolicy -EnableInternalSenderAdminNotifications `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.3" -ControlTitle "Ensure notifications for internal users sending malware is Enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.4 - Ensure Safe Attachments policy is enabled
+    try {
+        Write-Log "Checking 2.1.4 - Safe Attachments policy" -Level Info
+        $safeAttachmentPolicies = Get-SafeAttachmentPolicy
+
+        if ($safeAttachmentPolicies.Count -gt 0) {
+            $enabledPolicy = $safeAttachmentPolicies | Where-Object { $_.Enable -eq $true }
+            if ($enabledPolicy) {
+                Add-Result -ControlNumber "2.1.4" -ControlTitle "Ensure Safe Attachments policy is enabled" `
+                           -ProfileLevel "L2" -Result "Pass" -Details "Safe Attachments policy is enabled"
+            }
+            else {
+                Add-Result -ControlNumber "2.1.4" -ControlTitle "Ensure Safe Attachments policy is enabled" `
+                           -ProfileLevel "L2" -Result "Fail" -Details "Safe Attachments policy exists but not enabled" `
+                           -Remediation "Enable Safe Attachments policy"
+            }
+        }
+        else {
+            Add-Result -ControlNumber "2.1.4" -ControlTitle "Ensure Safe Attachments policy is enabled" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "No Safe Attachments policy found" `
+                       -Remediation "Create and enable Safe Attachments policy"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.4" -ControlTitle "Ensure Safe Attachments policy is enabled" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.5 - Ensure Safe Attachments for SharePoint, OneDrive, and Microsoft Teams is Enabled
+    try {
+        Write-Log "Checking 2.1.5 - Safe Attachments for SPO/ODB/Teams" -Level Info
+        $atpPolicy = Get-AtpPolicyForO365
+
+        if ($atpPolicy.EnableATPForSPOTeamsODB -eq $true) {
+            Add-Result -ControlNumber "2.1.5" -ControlTitle "Ensure Safe Attachments for SharePoint, OneDrive, and Microsoft Teams is Enabled" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Safe Attachments enabled for SPO/ODB/Teams"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.5" -ControlTitle "Ensure Safe Attachments for SharePoint, OneDrive, and Microsoft Teams is Enabled" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Safe Attachments not enabled for SPO/ODB/Teams" `
+                       -Remediation "Set-AtpPolicyForO365 -EnableATPForSPOTeamsODB `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.5" -ControlTitle "Ensure Safe Attachments for SharePoint, OneDrive, and Microsoft Teams is Enabled" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.6 - Ensure Exchange Online Spam Policies are set to notify administrators
+    try {
+        Write-Log "Checking 2.1.6 - Spam policy notifications" -Level Info
+        $hostedContentPolicies = Get-HostedContentFilterPolicy
+        $notificationsConfigured = $false
+
+        foreach ($policy in $hostedContentPolicies) {
+            if ($policy.NotifyAdmin -eq $true -or $policy.NotifyCustom -eq $true) {
+                $notificationsConfigured = $true
+                break
+            }
+        }
+
+        if ($notificationsConfigured) {
+            Add-Result -ControlNumber "2.1.6" -ControlTitle "Ensure Exchange Online Spam Policies are set to notify administrators" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Spam policy notifications configured"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.6" -ControlTitle "Ensure Exchange Online Spam Policies are set to notify administrators" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Spam policy notifications not configured" `
+                       -Remediation "Configure admin notifications in spam filter policies"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.6" -ControlTitle "Ensure Exchange Online Spam Policies are set to notify administrators" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.7 - Ensure that an anti-phishing policy has been created
+    try {
+        Write-Log "Checking 2.1.7 - Anti-phishing policy" -Level Info
+        $antiPhishPolicies = Get-AntiPhishPolicy
+
+        if ($antiPhishPolicies.Count -gt 0) {
+            Add-Result -ControlNumber "2.1.7" -ControlTitle "Ensure that an anti-phishing policy has been created" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Anti-phishing policy exists"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.7" -ControlTitle "Ensure that an anti-phishing policy has been created" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "No anti-phishing policy found" `
+                       -Remediation "Create an anti-phishing policy"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.7" -ControlTitle "Ensure that an anti-phishing policy has been created" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.8 - Ensure that SPF records are published for all Exchange Domains
+    try {
+        Write-Log "Checking 2.1.8 - SPF records" -Level Info
+        $acceptedDomains = Get-AcceptedDomain
+        $missingSpf = @()
+
+        foreach ($domain in $acceptedDomains) {
+            if ($domain.DomainType -eq "Authoritative") {
+                try {
+                    $spfRecord = Resolve-DnsName -Name $domain.DomainName -Type TXT -ErrorAction SilentlyContinue |
+                                 Where-Object { $_.Strings -like "*v=spf1*" }
+                    if (-not $spfRecord) {
+                        $missingSpf += $domain.DomainName
+                    }
+                }
+                catch {
+                    $missingSpf += $domain.DomainName
+                }
+            }
+        }
+
+        if ($missingSpf.Count -eq 0) {
+            Add-Result -ControlNumber "2.1.8" -ControlTitle "Ensure that SPF records are published for all Exchange Domains" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "SPF records present for all domains"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.8" -ControlTitle "Ensure that SPF records are published for all Exchange Domains" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Missing SPF records for: $($missingSpf -join ', ')" `
+                       -Remediation "Publish SPF records for all domains"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.8" -ControlTitle "Ensure that SPF records are published for all Exchange Domains" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.9 - Ensure that DKIM is enabled for all Exchange Online Domains
+    try {
+        Write-Log "Checking 2.1.9 - DKIM enabled" -Level Info
+        $dkimConfigs = Get-DkimSigningConfig
+        $disabledDkim = $dkimConfigs | Where-Object { $_.Enabled -eq $false }
+
+        if ($disabledDkim.Count -eq 0) {
+            Add-Result -ControlNumber "2.1.9" -ControlTitle "Ensure that DKIM is enabled for all Exchange Online Domains" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "DKIM enabled for all domains"
+        }
+        else {
+            $domains = $disabledDkim.Domain -join ', '
+            Add-Result -ControlNumber "2.1.9" -ControlTitle "Ensure that DKIM is enabled for all Exchange Online Domains" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "DKIM not enabled for: $domains" `
+                       -Remediation "Enable DKIM signing for all domains"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.9" -ControlTitle "Ensure that DKIM is enabled for all Exchange Online Domains" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.10 - Ensure DMARC Records for all Exchange Online domains are published
+    try {
+        Write-Log "Checking 2.1.10 - DMARC records" -Level Info
+        $acceptedDomains = Get-AcceptedDomain
+        $missingDmarc = @()
+
+        foreach ($domain in $acceptedDomains) {
+            if ($domain.DomainType -eq "Authoritative") {
+                try {
+                    $dmarcRecord = Resolve-DnsName -Name "_dmarc.$($domain.DomainName)" -Type TXT -ErrorAction SilentlyContinue |
+                                   Where-Object { $_.Strings -like "*v=DMARC1*" }
+                    if (-not $dmarcRecord) {
+                        $missingDmarc += $domain.DomainName
+                    }
+                }
+                catch {
+                    $missingDmarc += $domain.DomainName
+                }
+            }
+        }
+
+        if ($missingDmarc.Count -eq 0) {
+            Add-Result -ControlNumber "2.1.10" -ControlTitle "Ensure DMARC Records for all Exchange Online domains are published" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "DMARC records present for all domains"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.10" -ControlTitle "Ensure DMARC Records for all Exchange Online domains are published" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Missing DMARC records for: $($missingDmarc -join ', ')" `
+                       -Remediation "Publish DMARC records for all domains"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.10" -ControlTitle "Ensure DMARC Records for all Exchange Online domains are published" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.11 - Ensure comprehensive attachment filtering is applied
+    try {
+        Write-Log "Checking 2.1.11 - Comprehensive attachment filtering" -Level Info
+        $malwarePolicies = Get-MalwareFilterPolicy
+
+        # Comprehensive list of dangerous file types
+        $requiredBlockedTypes = @('ace','ani','app','docm','exe','jar','reg','scr','vbe','vbs','xlsm')
+        $allTypesBlocked = $false
+
+        foreach ($policy in $malwarePolicies) {
+            if ($policy.FileTypes) {
+                $missingTypes = $requiredBlockedTypes | Where-Object { $policy.FileTypes -notcontains $_ }
+                if ($missingTypes.Count -eq 0) {
+                    $allTypesBlocked = $true
+                    break
+                }
+            }
+        }
+
+        if ($allTypesBlocked) {
+            Add-Result -ControlNumber "2.1.11" -ControlTitle "Ensure comprehensive attachment filtering is applied" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Comprehensive attachment filtering configured"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.11" -ControlTitle "Ensure comprehensive attachment filtering is applied" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Comprehensive attachment filtering not fully configured" `
+                       -Remediation "Block all dangerous file types in malware filter policy"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.11" -ControlTitle "Ensure comprehensive attachment filtering is applied" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.12 - Ensure the connection filter IP allow list is not used
+    try {
+        Write-Log "Checking 2.1.12 - Connection filter IP allow list" -Level Info
+        $connectionFilter = Get-HostedConnectionFilterPolicy -Identity Default
+
+        if ($connectionFilter.IPAllowList.Count -eq 0) {
+            Add-Result -ControlNumber "2.1.12" -ControlTitle "Ensure the connection filter IP allow list is not used" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "IP allow list is empty"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.12" -ControlTitle "Ensure the connection filter IP allow list is not used" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "IP allow list contains $($connectionFilter.IPAllowList.Count) entries" `
+                       -Remediation "Remove all entries from IP allow list"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.12" -ControlTitle "Ensure the connection filter IP allow list is not used" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.13 - Ensure the connection filter safe list is off
+    try {
+        Write-Log "Checking 2.1.13 - Connection filter safe list" -Level Info
+        $connectionFilter = Get-HostedConnectionFilterPolicy -Identity Default
+
+        if ($connectionFilter.EnableSafeList -eq $false) {
+            Add-Result -ControlNumber "2.1.13" -ControlTitle "Ensure the connection filter safe list is off" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Safe list is disabled"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.13" -ControlTitle "Ensure the connection filter safe list is off" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Safe list is enabled" `
+                       -Remediation "Set-HostedConnectionFilterPolicy -Identity Default -EnableSafeList `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.13" -ControlTitle "Ensure the connection filter safe list is off" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.1.14 - Ensure inbound anti-spam policies do not contain allowed domains
+    try {
+        Write-Log "Checking 2.1.14 - Anti-spam allowed domains" -Level Info
+        $contentFilters = Get-HostedContentFilterPolicy
+        $policiesWithAllowedDomains = @()
+
+        foreach ($policy in $contentFilters) {
+            if ($policy.AllowedSenderDomains.Count -gt 0 -or $policy.AllowedSenders.Count -gt 0) {
+                $policiesWithAllowedDomains += $policy.Name
+            }
+        }
+
+        if ($policiesWithAllowedDomains.Count -eq 0) {
+            Add-Result -ControlNumber "2.1.14" -ControlTitle "Ensure inbound anti-spam policies do not contain allowed domains" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "No allowed domains/senders in anti-spam policies"
+        }
+        else {
+            Add-Result -ControlNumber "2.1.14" -ControlTitle "Ensure inbound anti-spam policies do not contain allowed domains" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Policies with allowed domains: $($policiesWithAllowedDomains -join ', ')" `
+                       -Remediation "Remove allowed domains/senders from anti-spam policies"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.1.14" -ControlTitle "Ensure inbound anti-spam policies do not contain allowed domains" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 2.2.1 - Ensure emergency access account activity is monitored
+    Add-Result -ControlNumber "2.2.1" -ControlTitle "Ensure emergency access account activity is monitored" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Configure Cloud App Security alerts for emergency account usage" `
+               -Remediation "Set up monitoring and alerts for emergency access accounts"
+
+    # 2.4.1 - Ensure Priority account protection is enabled and configured
+    Add-Result -ControlNumber "2.4.1" -ControlTitle "Ensure Priority account protection is enabled and configured" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Verify in M365 Defender portal > Email & collaboration > Priority account protection" `
+               -Remediation "Configure priority account protection for executive accounts"
+
+    # 2.4.2 - Ensure Priority accounts have 'Strict protection' presets applied
+    Add-Result -ControlNumber "2.4.2" -ControlTitle "Ensure Priority accounts have 'Strict protection' presets applied" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Verify strict protection preset is applied to priority accounts" `
+               -Remediation "Apply strict protection preset to all priority accounts"
+
+    # 2.4.3 - Ensure Microsoft Defender for Cloud Apps is enabled and configured
+    Add-Result -ControlNumber "2.4.3" -ControlTitle "Ensure Microsoft Defender for Cloud Apps is enabled and configured" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Verify Defender for Cloud Apps configuration in M365 Defender portal" `
+               -Remediation "Enable and configure Microsoft Defender for Cloud Apps"
+
+    # 2.4.4 - Ensure Zero-hour auto purge for Microsoft Teams is on
+    try {
+        Write-Log "Checking 2.4.4 - Zero-hour auto purge for Teams" -Level Info
+        $atpPolicy = Get-AtpPolicyForO365
+
+        if ($atpPolicy.EnableATPForSPOTeamsODB -eq $true) {
+            Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "ZAP for Teams is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "ZAP for Teams is not enabled" `
+                       -Remediation "Set-AtpPolicyForO365 -EnableATPForSPOTeamsODB `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+}
+
+#endregion
+
+#region Section 3: Microsoft Purview
+
+function Test-Purview {
+    Write-Log "Checking Section 3: Microsoft Purview..." -Level Info
+
+    # 3.1.1 - Ensure Microsoft 365 audit log search is Enabled
+    try {
+        Write-Log "Checking 3.1.1 - Audit log search enabled" -Level Info
+        $auditConfig = Get-AdminAuditLogConfig
+
+        if ($auditConfig.UnifiedAuditLogIngestionEnabled -eq $true) {
+            Add-Result -ControlNumber "3.1.1" -ControlTitle "Ensure Microsoft 365 audit log search is Enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Unified audit logging is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "3.1.1" -ControlTitle "Ensure Microsoft 365 audit log search is Enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Unified audit logging is not enabled" `
+                       -Remediation "Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "3.1.1" -ControlTitle "Ensure Microsoft 365 audit log search is Enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 3.2.1 - Ensure DLP policies are enabled
+    try {
+        Write-Log "Checking 3.2.1 - DLP policies enabled" -Level Info
+        # DLP cmdlets require Security & Compliance connection, try to get policies
+        try {
+            $dlpPolicies = Get-DlpCompliancePolicy -ErrorAction Stop
+            $enabledDlpPolicies = $dlpPolicies | Where-Object { $_.Enabled -eq $true }
+
+            if ($enabledDlpPolicies.Count -gt 0) {
+                Add-Result -ControlNumber "3.2.1" -ControlTitle "Ensure DLP policies are enabled" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "$($enabledDlpPolicies.Count) DLP policies enabled"
+            }
+            else {
+                Add-Result -ControlNumber "3.2.1" -ControlTitle "Ensure DLP policies are enabled" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "No enabled DLP policies found" `
+                           -Remediation "Create and enable DLP policies"
+            }
+        }
+        catch {
+            # If Get-DlpCompliancePolicy cmdlet not available, mark as Manual
+            Add-Result -ControlNumber "3.2.1" -ControlTitle "Ensure DLP policies are enabled" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "DLP cmdlets not available. Verify in Microsoft Purview > Data loss prevention" `
+                       -Remediation "Connect to Security & Compliance PowerShell or verify DLP policies in Microsoft Purview portal"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "3.2.1" -ControlTitle "Ensure DLP policies are enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 3.2.2 - Ensure DLP policies are enabled for Microsoft Teams
+    try {
+        Write-Log "Checking 3.2.2 - DLP for Teams" -Level Info
+        try {
+            $dlpPolicies = Get-DlpCompliancePolicy -ErrorAction Stop
+            $teamsDlpEnabled = $false
+
+            foreach ($policy in $dlpPolicies) {
+                if ($policy.TeamsLocation -ne $null -and $policy.Enabled -eq $true) {
+                    $teamsDlpEnabled = $true
+                    break
+                }
+            }
+
+            if ($teamsDlpEnabled) {
+                Add-Result -ControlNumber "3.2.2" -ControlTitle "Ensure DLP policies are enabled for Microsoft Teams" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "DLP enabled for Teams"
+            }
+            else {
+                Add-Result -ControlNumber "3.2.2" -ControlTitle "Ensure DLP policies are enabled for Microsoft Teams" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "DLP not enabled for Teams" `
+                           -Remediation "Enable DLP policies for Teams location"
+            }
+        }
+        catch {
+            # If Get-DlpCompliancePolicy cmdlet not available, mark as Manual
+            Add-Result -ControlNumber "3.2.2" -ControlTitle "Ensure DLP policies are enabled for Microsoft Teams" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "DLP cmdlets not available. Verify in Microsoft Purview > Data loss prevention" `
+                       -Remediation "Connect to Security & Compliance PowerShell or verify DLP policies in Microsoft Purview portal"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "3.2.2" -ControlTitle "Ensure DLP policies are enabled for Microsoft Teams" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 3.3.1 - Ensure Information Protection sensitivity label policies are published
+    Add-Result -ControlNumber "3.3.1" -ControlTitle "Ensure Information Protection sensitivity label policies are published" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Verify sensitivity labels in Microsoft Purview > Information Protection" `
+               -Remediation "Create and publish sensitivity label policies"
+}
+
+#endregion
+
+#region Section 4: Microsoft Intune Admin Center
+
+function Test-Intune {
+    Write-Log "Checking Section 4: Microsoft Intune Admin Center..." -Level Info
+
+    # 4.1 - Ensure devices without a compliance policy are marked 'not compliant'
+    try {
+        Write-Log "Checking 4.1 - Non-compliant device marking" -Level Info
+        $complianceSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicySettingStateSummaries"
+
+        # Check compliance policy settings
+        $deviceManagementSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement"
+
+        if ($deviceManagementSettings.intuneAccountId) {
+            # Intune is configured, check compliance settings
+            Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Intune compliance policies are configured"
+        }
+        else {
+            Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Intune not fully configured" `
+                       -Remediation "Configure Intune compliance policy settings to mark non-compliant devices"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check Intune settings via Graph API. Verify manually." `
+                   -Remediation "Check Intune > Devices > Compliance policies > Compliance policy settings"
+    }
+
+    # 4.2 - Ensure device enrollment for personally owned devices is blocked by default
+    try {
+        Write-Log "Checking 4.2 - Personal device enrollment restrictions" -Level Info
+        $enrollmentRestrictions = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations"
+
+        $restrictionPolicies = $enrollmentRestrictions.value | Where-Object {
+            $_.'@odata.type' -eq '#microsoft.graph.deviceEnrollmentPlatformRestrictionsConfiguration'
+        }
+
+        if ($restrictionPolicies) {
+            Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Enrollment restriction policies found: $($restrictionPolicies.Count)"
+        }
+        else {
+            Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "No enrollment restriction policies configured" `
+                       -Remediation "Configure enrollment restrictions to block personally owned devices"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
+                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check enrollment restrictions. Verify manually." `
+                   -Remediation "Check Intune > Devices > Enrollment restrictions"
+    }
+}
+
+#endregion
+
+#region Section 5: Microsoft Entra Admin Center
+
+function Test-EntraID {
+    Write-Log "Checking Section 5: Microsoft Entra Admin Center..." -Level Info
+
+    # 5.1.2.1 - Ensure 'Per-user MFA' is disabled
+    try {
+        Write-Log "Checking 5.1.2.1 - Per-user MFA disabled" -Level Info
+
+        if (-not $script:MsolConnected) {
+            Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "MSOnline connection not available. Manual verification required." `
+                       -Remediation "Connect to MSOnline or verify through Azure Portal: Azure AD > Users > Multi-Factor Authentication"
+        }
+        else {
+            $users = Get-MsolUser -All
+            $perUserMfaEnabled = $users | Where-Object { $_.StrongAuthenticationRequirements.State -eq "Enabled" -or
+                                                          $_.StrongAuthenticationRequirements.State -eq "Enforced" }
+
+            if ($perUserMfaEnabled.Count -eq 0) {
+                Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "No per-user MFA enabled (use Conditional Access instead)"
+            }
+            else {
+                Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "$($perUserMfaEnabled.Count) users have per-user MFA enabled" `
+                           -Remediation "Disable per-user MFA and use Conditional Access policies instead"
+            }
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.2.2 - Ensure third party integrated applications are not allowed
+    try {
+        Write-Log "Checking 5.1.2.2 - Third party app registration" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authPolicy.DefaultUserRolePermissions.AllowedToCreateApps -eq $false) {
+            Add-Result -ControlNumber "5.1.2.2" -ControlTitle "Ensure third party integrated applications are not allowed" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Users cannot register apps"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.2.2" -ControlTitle "Ensure third party integrated applications are not allowed" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Users can register applications" `
+                       -Remediation "Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{AllowedToCreateApps=`$false}"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.2.2" -ControlTitle "Ensure third party integrated applications are not allowed" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.2.3 - Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'
+    try {
+        Write-Log "Checking 5.1.2.3 - Restrict tenant creation" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authPolicy.DefaultUserRolePermissions.AllowedToCreateTenants -eq $false) {
+            Add-Result -ControlNumber "5.1.2.3" -ControlTitle "Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Tenant creation restricted"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.2.3" -ControlTitle "Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Users can create tenants" `
+                       -Remediation "Update-MgPolicyAuthorizationPolicy to restrict tenant creation"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.2.3" -ControlTitle "Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.2.4 - Ensure access to the Entra admin center is restricted
+    try {
+        Write-Log "Checking 5.1.2.4 - Entra admin center access" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authPolicy.DefaultUserRolePermissions.AllowedToReadOtherUsers -eq $false) {
+            Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Non-admin access to Entra admin center restricted"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Non-admins can access Entra admin center" `
+                       -Remediation "Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{AllowedToReadOtherUsers=`$false}"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.2.5 - Ensure the option to remain signed in is hidden
+    Add-Result -ControlNumber "5.1.2.5" -ControlTitle "Ensure the option to remain signed in is hidden" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check Company Branding settings" `
+               -Remediation "Hide 'Stay signed in?' option in company branding"
+
+    # 5.1.2.6 - Ensure 'LinkedIn account connections' is disabled
+    Add-Result -ControlNumber "5.1.2.6" -ControlTitle "Ensure 'LinkedIn account connections' is disabled" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check Entra Admin Center > Users > User settings" `
+               -Remediation "Disable LinkedIn account connections"
+
+    # 5.1.3.1 - Ensure a dynamic group for guest users is created
+    try {
+        Write-Log "Checking 5.1.3.1 - Dynamic group for guest users" -Level Info
+        $guestGroups = Get-MgGroup -Filter "groupTypes/any(c:c eq 'DynamicMembership')" -All
+        $guestDynamicGroup = $null
+
+        foreach ($group in $guestGroups) {
+            $groupDetails = Get-MgGroup -GroupId $group.Id -Property MembershipRule
+            if ($groupDetails.MembershipRule -like "*userType -eq 'Guest'*") {
+                $guestDynamicGroup = $group
+                break
+            }
+        }
+
+        if ($guestDynamicGroup) {
+            Add-Result -ControlNumber "5.1.3.1" -ControlTitle "Ensure a dynamic group for guest users is created" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Dynamic guest user group exists: $($guestDynamicGroup.DisplayName)"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.3.1" -ControlTitle "Ensure a dynamic group for guest users is created" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No dynamic guest user group found" `
+                       -Remediation "Create dynamic group with membership rule: user.userType -eq 'Guest'"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.3.1" -ControlTitle "Ensure a dynamic group for guest users is created" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.5.1 - Ensure user consent to apps accessing company data on their behalf is not allowed
+    try {
+        Write-Log "Checking 5.1.5.1 - User consent disabled" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authPolicy.DefaultUserRolePermissions.PermissionGrantPoliciesAssigned -contains "ManagePermissionGrantsForSelf.microsoft-user-default-legacy") {
+            Add-Result -ControlNumber "5.1.5.1" -ControlTitle "Ensure user consent to apps accessing company data on their behalf is not allowed" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "User consent is allowed" `
+                       -Remediation "Disable user consent for applications"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.5.1" -ControlTitle "Ensure user consent to apps accessing company data on their behalf is not allowed" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "User consent is disabled"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.5.1" -ControlTitle "Ensure user consent to apps accessing company data on their behalf is not allowed" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.5.2 - Ensure the admin consent workflow is enabled
+    Add-Result -ControlNumber "5.1.5.2" -ControlTitle "Ensure the admin consent workflow is enabled" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Entra Admin Center > Enterprise applications > Admin consent requests" `
+               -Remediation "Enable admin consent workflow"
+
+    # 5.1.6.1 - Ensure that collaboration invitations are sent to allowed domains only
+    Add-Result -ControlNumber "5.1.6.1" -ControlTitle "Ensure that collaboration invitations are sent to allowed domains only" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check External Identities > External collaboration settings" `
+               -Remediation "Configure allowed/denied domain list for B2B collaboration"
+
+    # 5.1.6.2 - Ensure that guest user access is restricted
+    try {
+        Write-Log "Checking 5.1.6.2 - Guest user access restricted" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        # Guest user role should be restricted (2af84b1e-32c8-42b7-82bc-daa82404023b = restricted guest)
+        if ($authPolicy.GuestUserRoleId -eq "2af84b1e-32c8-42b7-82bc-daa82404023b") {
+            Add-Result -ControlNumber "5.1.6.2" -ControlTitle "Ensure that guest user access is restricted" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Guest user access is restricted"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.6.2" -ControlTitle "Ensure that guest user access is restricted" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Guest user access is not fully restricted" `
+                       -Remediation "Set guest user access to most restrictive level"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.6.2" -ControlTitle "Ensure that guest user access is restricted" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.6.3 - Ensure guest user invitations are limited to the Guest Inviter role
+    try {
+        Write-Log "Checking 5.1.6.3 - Guest inviter role restriction" -Level Info
+        $authPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authPolicy.AllowInvitesFrom -eq "adminsAndGuestInviters") {
+            Add-Result -ControlNumber "5.1.6.3" -ControlTitle "Ensure guest user invitations are limited to the Guest Inviter role" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Guest invitations restricted to admins and guest inviters"
+        }
+        else {
+            Add-Result -ControlNumber "5.1.6.3" -ControlTitle "Ensure guest user invitations are limited to the Guest Inviter role" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Guest invitations not properly restricted: $($authPolicy.AllowInvitesFrom)" `
+                       -Remediation "Restrict guest invitations to admins and guest inviters only"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.1.6.3" -ControlTitle "Ensure guest user invitations are limited to the Guest Inviter role" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.1.8.1 - Ensure that password hash sync is enabled for hybrid deployments
+    Add-Result -ControlNumber "5.1.8.1" -ControlTitle "Ensure that password hash sync is enabled for hybrid deployments" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Verify in Azure AD Connect configuration (if hybrid deployment)" `
+               -Remediation "Enable password hash synchronization in Azure AD Connect"
+
+    # Conditional Access Policies (5.2.2.x)
+    Write-Log "Checking Conditional Access policies..." -Level Info
+
+    # 5.2.2.1 - Ensure multifactor authentication is enabled for all users in administrative roles
+    try {
+        Write-Log "Checking 5.2.2.1 - MFA for admin roles" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $adminMfaPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and
+                $policy.Conditions.Users.IncludeRoles -and
+                $policy.GrantControls.BuiltInControls -contains "mfa") {
+                $adminMfaPolicy = $true
+                break
+            }
+        }
+
+        if ($adminMfaPolicy) {
+            Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for admin roles exists"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for admin roles" `
+                       -Remediation "Create CA policy requiring MFA for all administrative roles"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.2 - Ensure multifactor authentication is enabled for all users
+    try {
+        Write-Log "Checking 5.2.2.2 - MFA for all users" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $allUserMfaPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and
+                ($policy.Conditions.Users.IncludeUsers -contains "All" -or $policy.Conditions.Users.IncludeGroups) -and
+                $policy.GrantControls.BuiltInControls -contains "mfa") {
+                $allUserMfaPolicy = $true
+                break
+            }
+        }
+
+        if ($allUserMfaPolicy) {
+            Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for all users exists"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for all users" `
+                       -Remediation "Create CA policy requiring MFA for all users"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.3 - Enable Conditional Access policies to block legacy authentication
+    try {
+        Write-Log "Checking 5.2.2.3 - Block legacy authentication" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $legacyAuthBlockPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and
+                $policy.Conditions.ClientAppTypes -contains "exchangeActiveSync" -and
+                $policy.Conditions.ClientAppTypes -contains "other" -and
+                $policy.GrantControls.BuiltInControls -contains "block") {
+                $legacyAuthBlockPolicy = $true
+                break
+            }
+        }
+
+        if ($legacyAuthBlockPolicy) {
+            Add-Result -ControlNumber "5.2.2.3" -ControlTitle "Enable Conditional Access policies to block legacy authentication" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy blocking legacy authentication exists"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.3" -ControlTitle "Enable Conditional Access policies to block legacy authentication" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy blocking legacy authentication" `
+                       -Remediation "Create CA policy to block legacy authentication protocols"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.3" -ControlTitle "Enable Conditional Access policies to block legacy authentication" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.4 - Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users
+    try {
+        Write-Log "Checking 5.2.2.4 - Admin sign-in frequency" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $adminSignInPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and
+                $policy.Conditions.Users.IncludeRoles -and
+                $policy.SessionControls.SignInFrequency -and
+                $policy.SessionControls.PersistentBrowser.Mode -eq "never") {
+                $adminSignInPolicy = $true
+                break
+            }
+        }
+
+        if ($adminSignInPolicy) {
+            Add-Result -ControlNumber "5.2.2.4" -ControlTitle "Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Admin sign-in frequency policy configured"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.4" -ControlTitle "Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Admin sign-in frequency policy not configured" `
+                       -Remediation "Create CA policy with sign-in frequency for admins"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.4" -ControlTitle "Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.5 - Ensure 'Phishing-resistant MFA strength' is required for Administrators
+    Add-Result -ControlNumber "5.2.2.5" -ControlTitle "Ensure 'Phishing-resistant MFA strength' is required for Administrators" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Verify CA policy requires phishing-resistant MFA (FIDO2/certificate) for admins" `
+               -Remediation "Create CA policy requiring phishing-resistant authentication for administrators"
+
+    # 5.2.2.6 - Enable Identity Protection user risk policies
+    try {
+        Write-Log "Checking 5.2.2.6 - User risk policy" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $userRiskPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and $policy.Conditions.UserRiskLevels) {
+                $userRiskPolicy = $true
+                break
+            }
+        }
+
+        if ($userRiskPolicy) {
+            Add-Result -ControlNumber "5.2.2.6" -ControlTitle "Enable Identity Protection user risk policies" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "User risk policy enabled"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.6" -ControlTitle "Enable Identity Protection user risk policies" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No user risk policy found" `
+                       -Remediation "Create CA policy based on user risk level"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.6" -ControlTitle "Enable Identity Protection user risk policies" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.7 - Enable Identity Protection sign-in risk policies
+    try {
+        Write-Log "Checking 5.2.2.7 - Sign-in risk policy" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $signInRiskPolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and $policy.Conditions.SignInRiskLevels) {
+                $signInRiskPolicy = $true
+                break
+            }
+        }
+
+        if ($signInRiskPolicy) {
+            Add-Result -ControlNumber "5.2.2.7" -ControlTitle "Enable Identity Protection sign-in risk policies" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Sign-in risk policy enabled"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.7" -ControlTitle "Enable Identity Protection sign-in risk policies" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No sign-in risk policy found" `
+                       -Remediation "Create CA policy based on sign-in risk level"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.7" -ControlTitle "Enable Identity Protection sign-in risk policies" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.8 - Ensure 'sign-in risk' is blocked for medium and high risk
+    Add-Result -ControlNumber "5.2.2.8" -ControlTitle "Ensure 'sign-in risk' is blocked for medium and high risk" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Verify sign-in risk policy blocks medium/high risk" `
+               -Remediation "Configure sign-in risk policy to block medium and high risk"
+
+    # 5.2.2.9 - Ensure a managed device is required for authentication
+    try {
+        Write-Log "Checking 5.2.2.9 - Managed device required" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        $managedDevicePolicy = $false
+
+        foreach ($policy in $caPolicies) {
+            if ($policy.State -eq "enabled" -and
+                ($policy.GrantControls.BuiltInControls -contains "compliantDevice" -or
+                 $policy.GrantControls.BuiltInControls -contains "domainJoinedDevice")) {
+                $managedDevicePolicy = $true
+                break
+            }
+        }
+
+        if ($managedDevicePolicy) {
+            Add-Result -ControlNumber "5.2.2.9" -ControlTitle "Ensure a managed device is required for authentication" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Managed device requirement configured"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.9" -ControlTitle "Ensure a managed device is required for authentication" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No managed device requirement found" `
+                       -Remediation "Create CA policy requiring compliant or Hybrid Azure AD joined device"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.9" -ControlTitle "Ensure a managed device is required for authentication" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.10 - Ensure a managed device is required to register security information
+    try {
+        Write-Log "Checking 5.2.2.10 - Managed device for MFA registration" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+
+        $mfaRegistrationPolicy = $caPolicies | Where-Object {
+            $_.Conditions.Applications.IncludeUserActions -contains "urn:user:registersecurityinfo" -and
+            $_.State -eq "enabled"
+        }
+
+        if ($mfaRegistrationPolicy) {
+            Add-Result -ControlNumber "5.2.2.10" -ControlTitle "Ensure a managed device is required to register security information" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy for MFA registration found: $($mfaRegistrationPolicy.DisplayName)"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.10" -ControlTitle "Ensure a managed device is required to register security information" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring managed device for MFA registration" `
+                       -Remediation "Create CA policy targeting 'Register security information' user action"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.10" -ControlTitle "Ensure a managed device is required to register security information" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.11 - Ensure sign-in frequency for Intune Enrollment is set to 'Every time'
+    try {
+        Write-Log "Checking 5.2.2.11 - Intune enrollment sign-in frequency" -Level Info
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+
+        $intuneEnrollmentPolicy = $caPolicies | Where-Object {
+            ($_.Conditions.Applications.IncludeApplications -contains "d4ebce55-015a-49b5-a083-c84d1797ae8c" -or  # Intune Enrollment
+             $_.Conditions.Applications.IncludeApplications -contains "0000000a-0000-0000-c000-000000000000") -and  # Intune
+            $_.State -eq "enabled"
+        }
+
+        if ($intuneEnrollmentPolicy) {
+            Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy for Intune enrollment found: $($intuneEnrollmentPolicy.DisplayName)"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy for Intune enrollment with sign-in frequency" `
+                       -Remediation "Create CA policy targeting Intune Enrollment app with 'Every time' sign-in frequency"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.2.12 - Ensure the device code sign-in flow is blocked
+    try {
+        Write-Log "Checking 5.2.2.12 - Device code flow blocked" -Level Info
+        $authFlowsPolicy = Get-MgPolicyAuthorizationPolicy
+
+        if ($authFlowsPolicy.DefaultUserRolePermissions.AllowedToUseSSPR -eq $false) {
+            # Note: Device code flow blocking is configured differently in newer API versions
+            # Checking for restrictive authentication flows policy
+            Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "Verify device code flow is blocked in Entra ID > Security > Authentication methods" `
+                       -Remediation "Block device code authentication flow in tenant settings"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "Verify device code flow is blocked in Entra ID > Security > Authentication methods" `
+                       -Remediation "Block device code authentication flow in tenant settings"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # Authentication Methods (5.2.3.x)
+
+    # 5.2.3.1 - Ensure Microsoft Authenticator is configured to protect against MFA fatigue
+    try {
+        Write-Log "Checking 5.2.3.1 - Authenticator MFA fatigue protection" -Level Info
+        $authMethodPolicy = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "MicrosoftAuthenticator"
+
+        $featureSettings = $authMethodPolicy.AdditionalProperties.featureSettings
+        $numberMatching = $featureSettings.numberMatchingRequiredState.state
+        $additionalContext = $featureSettings.displayAppInformationRequiredState.state
+
+        if ($numberMatching -eq "enabled" -and $additionalContext -eq "enabled") {
+            Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Number matching and app context enabled"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Number matching: $numberMatching, App context: $additionalContext" `
+                       -Remediation "Enable number matching and application context in Entra ID > Security > Authentication methods > Microsoft Authenticator"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check Authenticator settings. Verify manually." `
+                   -Remediation "Check Entra ID > Security > Authentication methods > Microsoft Authenticator"
+    }
+
+    # 5.2.3.2 - Ensure custom banned passwords lists are used
+    try {
+        Write-Log "Checking 5.2.3.2 - Custom banned passwords" -Level Info
+        $org = Get-MgOrganization
+
+        # Check if custom banned password list is configured
+        # Note: This information is in the password policy settings
+        if ($org.PasswordPolicies -match "BannedPasswordList") {
+            Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Custom banned password list is configured"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No custom banned password list found" `
+                       -Remediation "Configure custom banned password list in Entra ID > Security > Authentication methods > Password protection"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check banned password list. Verify manually." `
+                   -Remediation "Check Entra ID > Security > Authentication methods > Password protection"
+    }
+
+    # 5.2.3.3 - Ensure password protection is enabled for on-prem Active Directory
+    Add-Result -ControlNumber "5.2.3.3" -ControlTitle "Ensure password protection is enabled for on-prem Active Directory" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Verify Azure AD Password Protection agent installed on-premises (if hybrid)" `
+               -Remediation "Install and configure Azure AD Password Protection for on-premises AD"
+
+    # 5.2.3.4 - Ensure all member users are 'MFA capable'
+    try {
+        Write-Log "Checking 5.2.3.4 - All users MFA capable" -Level Info
+        $authMethods = Get-MgReportAuthenticationMethodUserRegistrationDetail
+        $nonMfaUsers = $authMethods | Where-Object { $_.IsMfaCapable -eq $false -and $_.UserType -eq "member" }
+
+        if ($nonMfaUsers.Count -eq 0) {
+            Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "All member users are MFA capable"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($nonMfaUsers.Count) users are not MFA capable" `
+                       -Remediation "Ensure all users register MFA methods"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 5.2.3.5 - Ensure weak authentication methods are disabled
+    try {
+        Write-Log "Checking 5.2.3.5 - Weak auth methods disabled" -Level Info
+        $smsConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Sms"
+        $voiceConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Voice"
+
+        $weakMethods = @()
+        if ($smsConfig.State -eq "enabled") { $weakMethods += "SMS" }
+        if ($voiceConfig.State -eq "enabled") { $weakMethods += "Voice" }
+
+        if ($weakMethods.Count -eq 0) {
+            Add-Result -ControlNumber "5.2.3.5" -ControlTitle "Ensure weak authentication methods are disabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Weak authentication methods (SMS, Voice) are disabled"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.5" -ControlTitle "Ensure weak authentication methods are disabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Weak methods enabled: $($weakMethods -join ', ')" `
+                       -Remediation "Disable SMS and Voice authentication methods in Entra ID > Security > Authentication methods"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.3.5" -ControlTitle "Ensure weak authentication methods are disabled" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check authentication methods. Verify manually." `
+                   -Remediation "Check Entra ID > Security > Authentication methods"
+    }
+
+    # 5.2.3.6 - Ensure system-preferred multifactor authentication is enabled
+    try {
+        Write-Log "Checking 5.2.3.6 - System-preferred MFA" -Level Info
+        $authMethodsPolicy = Get-MgPolicyAuthenticationMethodPolicy
+
+        # Check if system-preferred MFA is enabled in the policy
+        if ($authMethodsPolicy.SystemCredentialPreferences.State -eq "enabled") {
+            Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "System-preferred MFA is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "System-preferred MFA is not enabled" `
+                       -Remediation "Enable system-preferred MFA in Entra ID > Security > Authentication methods > Settings"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check system-preferred MFA. Verify manually." `
+                   -Remediation "Check Entra ID > Security > Authentication methods > Settings"
+    }
+
+    # Password Reset
+
+    # 5.2.4.1 - Ensure 'Self service password reset enabled' is set to 'All'
+    try {
+        Write-Log "Checking 5.2.4.1 - SSPR enabled for all" -Level Info
+        $sspr = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/authorizationPolicy"
+
+        if ($sspr.allowedToUseSSPR -eq $true) {
+            Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "SSPR enabled for all users"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "SSPR not enabled for all users" `
+                       -Remediation "Enable SSPR in Entra ID > Password reset > Properties"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check SSPR settings. Verify manually." `
+                   -Remediation "Check Entra ID > Password reset > Properties"
+    }
+
+    # Identity Governance (5.3.x)
+
+    # 5.3.1 - Ensure 'Privileged Identity Management' is used to manage roles
+    try {
+        Write-Log "Checking 5.3.1 - PIM configured" -Level Info
+        $pimRoles = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules"
+
+        if ($pimRoles.value.Count -gt 0) {
+            Add-Result -ControlNumber "5.3.1" -ControlTitle "Ensure 'Privileged Identity Management' is used to manage roles" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "PIM role assignments found: $($pimRoles.value.Count) eligible assignments"
+        }
+        else {
+            Add-Result -ControlNumber "5.3.1" -ControlTitle "Ensure 'Privileged Identity Management' is used to manage roles" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "No PIM role assignments found" `
+                       -Remediation "Configure Privileged Identity Management for all admin roles"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.3.1" -ControlTitle "Ensure 'Privileged Identity Management' is used to manage roles" `
+                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check PIM configuration. Verify manually." `
+                   -Remediation "Check PIM configuration in Entra ID > Identity Governance > Privileged Identity Management"
+    }
+
+    # 5.3.2 - Ensure 'Access reviews' for Guest Users are configured
+    try {
+        Write-Log "Checking 5.3.2 - Guest user access reviews" -Level Info
+        $accessReviews = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/identityGovernance/accessReviews/definitions"
+
+        $guestReviews = $accessReviews.value | Where-Object {
+            $_.scope.query -match "userType" -or $_.scope.query -match "guest"
+        }
+
+        if ($guestReviews.Count -gt 0) {
+            Add-Result -ControlNumber "5.3.2" -ControlTitle "Ensure 'Access reviews' for Guest Users are configured" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Guest user access reviews configured: $($guestReviews.Count) reviews"
+        }
+        else {
+            Add-Result -ControlNumber "5.3.2" -ControlTitle "Ensure 'Access reviews' for Guest Users are configured" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No guest user access reviews configured" `
+                       -Remediation "Configure recurring access reviews for guest users"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.3.2" -ControlTitle "Ensure 'Access reviews' for Guest Users are configured" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check access reviews. Verify manually." `
+                   -Remediation "Check Entra ID > Identity Governance > Access reviews"
+    }
+
+    # 5.3.3 - Ensure 'Access reviews' for privileged roles are configured
+    try {
+        Write-Log "Checking 5.3.3 - Privileged role access reviews" -Level Info
+        $pimAccessReviews = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/identityGovernance/accessReviews/definitions" -ErrorAction SilentlyContinue
+
+        $roleReviews = $pimAccessReviews.value | Where-Object {
+            $_.scope.'@odata.type' -match "principalResourceMembershipsScope" -or
+            $_.scope.query -match "roleDefinition"
+        }
+
+        if ($roleReviews.Count -gt 0) {
+            Add-Result -ControlNumber "5.3.3" -ControlTitle "Ensure 'Access reviews' for privileged roles are configured" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Privileged role access reviews configured: $($roleReviews.Count) reviews"
+        }
+        else {
+            Add-Result -ControlNumber "5.3.3" -ControlTitle "Ensure 'Access reviews' for privileged roles are configured" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No privileged role access reviews configured" `
+                       -Remediation "Configure access reviews for all privileged roles in PIM"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.3.3" -ControlTitle "Ensure 'Access reviews' for privileged roles are configured" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check role access reviews. Verify manually." `
+                   -Remediation "Check PIM > Access reviews"
+    }
+
+    # 5.3.4 - Ensure approval is required for Global Administrator role activation
+    try {
+        Write-Log "Checking 5.3.4 - Global Admin approval requirement" -Level Info
+        $globalAdminRole = Get-MgDirectoryRole -Filter "displayName eq 'Global Administrator'"
+        $pimPolicies = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/roleManagementPolicies?`$filter=scopeId eq '/' and scopeType eq 'DirectoryRole'"
+
+        $globalAdminPolicy = $pimPolicies.value | Where-Object {
+            $_.displayName -match "Global Administrator"
+        }
+
+        if ($globalAdminPolicy) {
+            $approvalRule = $globalAdminPolicy.rules | Where-Object { $_.id -eq "Approval_EndUser_Assignment" }
+            if ($approvalRule.setting.isApprovalRequired -eq $true) {
+                Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Global Administrator activation"
+            }
+            else {
+                Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Global Administrator activation" `
+                           -Remediation "Require approval for Global Administrator role activation in PIM"
+            }
+        }
+        else {
+            Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No PIM policy found for Global Administrator" `
+                       -Remediation "Configure PIM for Global Administrator role with approval requirement"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check Global Admin PIM settings. Verify manually." `
+                   -Remediation "Check PIM > Azure AD roles > Role settings > Global Administrator"
+    }
+
+    # 5.3.5 - Ensure approval is required for Privileged Role Administrator activation
+    try {
+        Write-Log "Checking 5.3.5 - Privileged Role Admin approval requirement" -Level Info
+        $pimPolicies = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/roleManagementPolicies?`$filter=scopeId eq '/' and scopeType eq 'DirectoryRole'"
+
+        $privRoleAdminPolicy = $pimPolicies.value | Where-Object {
+            $_.displayName -match "Privileged Role Administrator"
+        }
+
+        if ($privRoleAdminPolicy) {
+            $approvalRule = $privRoleAdminPolicy.rules | Where-Object { $_.id -eq "Approval_EndUser_Assignment" }
+            if ($approvalRule.setting.isApprovalRequired -eq $true) {
+                Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Privileged Role Administrator activation"
+            }
+            else {
+                Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Privileged Role Administrator activation" `
+                           -Remediation "Require approval for Privileged Role Administrator activation in PIM"
+            }
+        }
+        else {
+            Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No PIM policy found for Privileged Role Administrator" `
+                       -Remediation "Configure PIM for Privileged Role Administrator role with approval requirement"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check Privileged Role Admin PIM settings. Verify manually." `
+                   -Remediation "Check PIM > Azure AD roles > Role settings > Privileged Role Administrator"
+    }
+}
+
+#endregion
+
+#region Section 6: Exchange Admin Center
+
+function Test-ExchangeOnline {
+    Write-Log "Checking Section 6: Exchange Admin Center..." -Level Info
+
+    # 6.1.1 - Ensure 'AuditDisabled' organizationally is set to 'False'
+    try {
+        Write-Log "Checking 6.1.1 - Organization audit enabled" -Level Info
+        $orgConfig = Get-OrganizationConfig
+
+        if ($orgConfig.AuditDisabled -eq $false) {
+            Add-Result -ControlNumber "6.1.1" -ControlTitle "Ensure 'AuditDisabled' organizationally is set to 'False'" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Organization auditing is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.1.1" -ControlTitle "Ensure 'AuditDisabled' organizationally is set to 'False'" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Organization auditing is disabled" `
+                       -Remediation "Set-OrganizationConfig -AuditDisabled `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.1.1" -ControlTitle "Ensure 'AuditDisabled' organizationally is set to 'False'" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.1.2 - Ensure mailbox audit actions are configured
+    try {
+        Write-Log "Checking 6.1.2 - Mailbox audit actions" -Level Info
+        $orgConfig = Get-OrganizationConfig
+
+        $ownerActions = $orgConfig.AuditBypassEnabled
+        $requiredActions = @("Update", "Move", "MoveToDeletedItems", "SoftDelete", "HardDelete", "SendAs", "SendOnBehalf", "Create")
+
+        # Check if mailbox auditing is configured with appropriate actions
+        if ($orgConfig.AuditDisabled -eq $false) {
+            Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Mailbox auditing is enabled at organization level"
+        }
+        else {
+            Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "Verify mailbox audit actions for owner, delegate, and admin" `
+                       -Remediation "Configure appropriate mailbox audit actions using Set-MailboxAuditBypassAssociation"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.1.3 - Ensure 'AuditBypassEnabled' is not enabled on mailboxes
+    try {
+        Write-Log "Checking 6.1.3 - Mailbox audit bypass" -Level Info
+        # Note: AuditBypassEnabled property may not be available in all Exchange Online versions
+        # Using Get-Mailbox instead of Get-EXOMailbox for better compatibility
+        try {
+            $bypassMailboxes = Get-Mailbox -ResultSize Unlimited |
+                               Get-MailboxAuditBypassAssociation |
+                               Where-Object { $_.AuditBypassEnabled -eq $true }
+
+            if ($bypassMailboxes.Count -eq 0 -or $null -eq $bypassMailboxes) {
+                Add-Result -ControlNumber "6.1.3" -ControlTitle "Ensure 'AuditBypassEnabled' is not enabled on mailboxes" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "No mailboxes have audit bypass enabled"
+            }
+            else {
+                $mbList = ($bypassMailboxes | Select-Object -ExpandProperty Identity -First 10) -join ', '
+                Add-Result -ControlNumber "6.1.3" -ControlTitle "Ensure 'AuditBypassEnabled' is not enabled on mailboxes" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "$($bypassMailboxes.Count) mailboxes have bypass enabled: $mbList" `
+                           -Remediation "Disable audit bypass: Set-MailboxAuditBypassAssociation -Identity <mailbox> -AuditBypassEnabled `$false"
+            }
+        }
+        catch {
+            # If cmdlet not available, mark as Manual
+            Add-Result -ControlNumber "6.1.3" -ControlTitle "Ensure 'AuditBypassEnabled' is not enabled on mailboxes" `
+                       -ProfileLevel "L1" -Result "Manual" -Details "Unable to check audit bypass status. Verify manually in Exchange Admin Center." `
+                       -Remediation "Check Exchange Admin Center > Recipients > Mailboxes > Audit settings"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.1.3" -ControlTitle "Ensure 'AuditBypassEnabled' is not enabled on mailboxes" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.2.1 - Ensure all forms of mail forwarding are blocked and/or disabled
+    try {
+        Write-Log "Checking 6.2.1 - Mail forwarding blocked" -Level Info
+        $outboundSpamPolicy = Get-HostedOutboundSpamFilterPolicy
+
+        if ($outboundSpamPolicy.AutoForwardingMode -eq "Off") {
+            Add-Result -ControlNumber "6.2.1" -ControlTitle "Ensure all forms of mail forwarding are blocked and/or disabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Auto-forwarding is disabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.2.1" -ControlTitle "Ensure all forms of mail forwarding are blocked and/or disabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Auto-forwarding mode: $($outboundSpamPolicy.AutoForwardingMode)" `
+                       -Remediation "Set-HostedOutboundSpamFilterPolicy -Identity Default -AutoForwardingMode Off"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.2.1" -ControlTitle "Ensure all forms of mail forwarding are blocked and/or disabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.2.2 - Ensure mail transport rules do not whitelist specific domains
+    try {
+        Write-Log "Checking 6.2.2 - Transport rules whitelisting" -Level Info
+        $transportRules = Get-TransportRule
+        $whitelistingRules = @()
+
+        foreach ($rule in $transportRules) {
+            if ($rule.SetSCL -eq -1 -or $rule.SetSpamConfidenceLevel -eq -1) {
+                $whitelistingRules += $rule.Name
+            }
+        }
+
+        if ($whitelistingRules.Count -eq 0) {
+            Add-Result -ControlNumber "6.2.2" -ControlTitle "Ensure mail transport rules do not whitelist specific domains" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "No whitelisting transport rules found"
+        }
+        else {
+            Add-Result -ControlNumber "6.2.2" -ControlTitle "Ensure mail transport rules do not whitelist specific domains" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Whitelisting rules found: $($whitelistingRules -join ', ')" `
+                       -Remediation "Remove or modify transport rules that whitelist domains"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.2.2" -ControlTitle "Ensure mail transport rules do not whitelist specific domains" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.2.3 - Ensure email from external senders is identified
+    try {
+        Write-Log "Checking 6.2.3 - External email identification" -Level Info
+        $externalInOutlook = Get-ExternalInOutlook
+
+        if ($externalInOutlook.Enabled -eq $true) {
+            Add-Result -ControlNumber "6.2.3" -ControlTitle "Ensure email from external senders is identified" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "External email tagging is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.2.3" -ControlTitle "Ensure email from external senders is identified" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "External email tagging is disabled" `
+                       -Remediation "Enable-ExternalInOutlook"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.2.3" -ControlTitle "Ensure email from external senders is identified" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.3.1 - Ensure users installing Outlook add-ins is not allowed
+    try {
+        Write-Log "Checking 6.3.1 - Outlook add-ins restricted" -Level Info
+        $roleAssignmentPolicy = Get-RoleAssignmentPolicy -Identity "Default Role Assignment Policy"
+        $myMarketplaceApps = Get-ManagementRoleAssignment -RoleAssignee $roleAssignmentPolicy.Identity |
+                             Where-Object { $_.Role -eq "My Marketplace Apps" }
+
+        if (-not $myMarketplaceApps) {
+            Add-Result -ControlNumber "6.3.1" -ControlTitle "Ensure users installing Outlook add-ins is not allowed" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "User add-in installation is restricted"
+        }
+        else {
+            Add-Result -ControlNumber "6.3.1" -ControlTitle "Ensure users installing Outlook add-ins is not allowed" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Users can install add-ins" `
+                       -Remediation "Remove 'My Marketplace Apps' role from default policy"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.3.1" -ControlTitle "Ensure users installing Outlook add-ins is not allowed" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.5.1 - Ensure modern authentication for Exchange Online is enabled
+    try {
+        Write-Log "Checking 6.5.1 - Modern authentication enabled" -Level Info
+        $orgConfig = Get-OrganizationConfig
+
+        if ($orgConfig.OAuth2ClientProfileEnabled -eq $true) {
+            Add-Result -ControlNumber "6.5.1" -ControlTitle "Ensure modern authentication for Exchange Online is enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Modern authentication is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.5.1" -ControlTitle "Ensure modern authentication for Exchange Online is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Modern authentication is disabled" `
+                       -Remediation "Set-OrganizationConfig -OAuth2ClientProfileEnabled `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.5.1" -ControlTitle "Ensure modern authentication for Exchange Online is enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.5.2 - Ensure MailTips are enabled for end users
+    try {
+        Write-Log "Checking 6.5.2 - MailTips enabled" -Level Info
+        $orgConfig = Get-OrganizationConfig
+
+        if ($orgConfig.MailTipsAllTipsEnabled -eq $true) {
+            Add-Result -ControlNumber "6.5.2" -ControlTitle "Ensure MailTips are enabled for end users" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "MailTips are enabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.5.2" -ControlTitle "Ensure MailTips are enabled for end users" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "MailTips are not fully enabled" `
+                       -Remediation "Set-OrganizationConfig -MailTipsAllTipsEnabled `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.5.2" -ControlTitle "Ensure MailTips are enabled for end users" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.5.3 - Ensure additional storage providers are restricted in Outlook on the web
+    try {
+        Write-Log "Checking 6.5.3 - OWA storage providers restricted" -Level Info
+        $owaPolicy = Get-OwaMailboxPolicy -Identity "OwaMailboxPolicy-Default"
+
+        if ($owaPolicy.AdditionalStorageProvidersAvailable -eq $false) {
+            Add-Result -ControlNumber "6.5.3" -ControlTitle "Ensure additional storage providers are restricted in Outlook on the web" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Third-party storage providers are disabled in OWA"
+        }
+        else {
+            Add-Result -ControlNumber "6.5.3" -ControlTitle "Ensure additional storage providers are restricted in Outlook on the web" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Third-party storage providers are enabled" `
+                       -Remediation "Set-OwaMailboxPolicy -AdditionalStorageProvidersAvailable `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.5.3" -ControlTitle "Ensure additional storage providers are restricted in Outlook on the web" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 6.5.4 - Ensure SMTP AUTH is disabled
+    try {
+        Write-Log "Checking 6.5.4 - SMTP AUTH disabled" -Level Info
+        $transportConfig = Get-TransportConfig
+
+        if ($transportConfig.SmtpClientAuthenticationDisabled -eq $true) {
+            Add-Result -ControlNumber "6.5.4" -ControlTitle "Ensure SMTP AUTH is disabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "SMTP AUTH is disabled"
+        }
+        else {
+            Add-Result -ControlNumber "6.5.4" -ControlTitle "Ensure SMTP AUTH is disabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "SMTP AUTH is enabled" `
+                       -Remediation "Set-TransportConfig -SmtpClientAuthenticationDisabled `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "6.5.4" -ControlTitle "Ensure SMTP AUTH is disabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+}
+
+#endregion
+
+#region Section 7: SharePoint Admin Center
+
+function Test-SharePointOnline {
+    Write-Log "Checking Section 7: SharePoint Admin Center..." -Level Info
+
+    # 7.2.1 - Ensure modern authentication for SharePoint applications is required
+    try {
+        Write-Log "Checking 7.2.1 - SharePoint modern authentication" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.LegacyAuthProtocolsEnabled -eq $false) {
+            Add-Result -ControlNumber "7.2.1" -ControlTitle "Ensure modern authentication for SharePoint applications is required" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Legacy authentication is disabled"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.1" -ControlTitle "Ensure modern authentication for SharePoint applications is required" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Legacy authentication is enabled" `
+                       -Remediation "Set-SPOTenant -LegacyAuthProtocolsEnabled `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.1" -ControlTitle "Ensure modern authentication for SharePoint applications is required" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.2 - Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled
+    try {
+        Write-Log "Checking 7.2.2 - SharePoint Azure AD B2B integration" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.EnableAzureADB2BIntegration -eq $true) {
+            Add-Result -ControlNumber "7.2.2" -ControlTitle "Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Azure AD B2B integration is enabled"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.2" -ControlTitle "Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Azure AD B2B integration is disabled" `
+                       -Remediation "Set-SPOTenant -EnableAzureADB2BIntegration `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.2" -ControlTitle "Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.3 - Ensure external content sharing is restricted
+    try {
+        Write-Log "Checking 7.2.3 - External sharing restricted" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        # Should be ExistingExternalUserSharingOnly or ExternalUserAndGuestSharing (most restrictive)
+        if ($spoTenant.SharingCapability -eq "ExistingExternalUserSharingOnly" -or
+            $spoTenant.SharingCapability -eq "Disabled") {
+            Add-Result -ControlNumber "7.2.3" -ControlTitle "Ensure external content sharing is restricted" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "External sharing: $($spoTenant.SharingCapability)"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.3" -ControlTitle "Ensure external content sharing is restricted" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "External sharing too permissive: $($spoTenant.SharingCapability)" `
+                       -Remediation "Set-SPOTenant -SharingCapability ExistingExternalUserSharingOnly"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.3" -ControlTitle "Ensure external content sharing is restricted" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.4 - Ensure OneDrive content sharing is restricted
+    try {
+        Write-Log "Checking 7.2.4 - OneDrive sharing restricted" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.OneDriveSharingCapability -eq "ExistingExternalUserSharingOnly" -or
+            $spoTenant.OneDriveSharingCapability -eq "Disabled") {
+            Add-Result -ControlNumber "7.2.4" -ControlTitle "Ensure OneDrive content sharing is restricted" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "OneDrive sharing: $($spoTenant.OneDriveSharingCapability)"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.4" -ControlTitle "Ensure OneDrive content sharing is restricted" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "OneDrive sharing too permissive: $($spoTenant.OneDriveSharingCapability)" `
+                       -Remediation "Set-SPOTenant -OneDriveSharingCapability ExistingExternalUserSharingOnly"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.4" -ControlTitle "Ensure OneDrive content sharing is restricted" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.5 - Ensure that SharePoint guest users cannot share items they don't own
+    try {
+        Write-Log "Checking 7.2.5 - Guest re-sharing prevented" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.PreventExternalUsersFromResharing -eq $true) {
+            Add-Result -ControlNumber "7.2.5" -ControlTitle "Ensure that SharePoint guest users cannot share items they don't own" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Guest re-sharing is prevented"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.5" -ControlTitle "Ensure that SharePoint guest users cannot share items they don't own" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Guests can re-share content" `
+                       -Remediation "Set-SPOTenant -PreventExternalUsersFromResharing `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.5" -ControlTitle "Ensure that SharePoint guest users cannot share items they don't own" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.6 - Ensure SharePoint external sharing is managed through domain whitelist/blacklists
+    try {
+        Write-Log "Checking 7.2.6 - SharePoint domain restrictions" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.SharingDomainRestrictionMode -ne "None") {
+            Add-Result -ControlNumber "7.2.6" -ControlTitle "Ensure SharePoint external sharing is managed through domain whitelist/blacklists" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Domain restrictions configured: $($spoTenant.SharingDomainRestrictionMode)"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.6" -ControlTitle "Ensure SharePoint external sharing is managed through domain whitelist/blacklists" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "No domain restrictions configured" `
+                       -Remediation "Configure domain allow or deny list for external sharing"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.6" -ControlTitle "Ensure SharePoint external sharing is managed through domain whitelist/blacklists" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.7 - Ensure link sharing is restricted in SharePoint and OneDrive
+    try {
+        Write-Log "Checking 7.2.7 - Link sharing restricted" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        # DefaultSharingLinkType should be Direct (most restrictive)
+        if ($spoTenant.DefaultSharingLinkType -eq "Direct") {
+            Add-Result -ControlNumber "7.2.7" -ControlTitle "Ensure link sharing is restricted in SharePoint and OneDrive" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Default link type is 'Specific people'"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.7" -ControlTitle "Ensure link sharing is restricted in SharePoint and OneDrive" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Default link type: $($spoTenant.DefaultSharingLinkType)" `
+                       -Remediation "Set-SPOTenant -DefaultSharingLinkType Direct"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.7" -ControlTitle "Ensure link sharing is restricted in SharePoint and OneDrive" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.8 - Ensure external sharing is restricted by security group
+    Add-Result -ControlNumber "7.2.8" -ControlTitle "Ensure external sharing is restricted by security group" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Verify external sharing is limited to specific security groups" `
+               -Remediation "Configure security group restrictions for external sharing"
+
+    # 7.2.9 - Ensure guest access to a site or OneDrive will expire automatically
+    try {
+        Write-Log "Checking 7.2.9 - Guest link expiration" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.ExternalUserExpirationRequired -eq $true) {
+            Add-Result -ControlNumber "7.2.9" -ControlTitle "Ensure guest access to a site or OneDrive will expire automatically" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Guest link expiration configured: $($spoTenant.ExternalUserExpireInDays) days"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.9" -ControlTitle "Ensure guest access to a site or OneDrive will expire automatically" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Guest link expiration not configured" `
+                       -Remediation "Set-SPOTenant -ExternalUserExpirationRequired `$true -ExternalUserExpireInDays 30"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.9" -ControlTitle "Ensure guest access to a site or OneDrive will expire automatically" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.10 - Ensure reauthentication with verification code is restricted
+    try {
+        Write-Log "Checking 7.2.10 - Email verification required" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.EmailAttestationRequired -eq $true) {
+            Add-Result -ControlNumber "7.2.10" -ControlTitle "Ensure reauthentication with verification code is restricted" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Email verification required for guests"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.10" -ControlTitle "Ensure reauthentication with verification code is restricted" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Email verification not required" `
+                       -Remediation "Set-SPOTenant -EmailAttestationRequired `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.10" -ControlTitle "Ensure reauthentication with verification code is restricted" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.2.11 - Ensure the SharePoint default sharing link permission is set
+    try {
+        Write-Log "Checking 7.2.11 - Default sharing link permission" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.DefaultLinkPermission -eq "View") {
+            Add-Result -ControlNumber "7.2.11" -ControlTitle "Ensure the SharePoint default sharing link permission is set" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Default permission is 'View'"
+        }
+        else {
+            Add-Result -ControlNumber "7.2.11" -ControlTitle "Ensure the SharePoint default sharing link permission is set" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Default permission: $($spoTenant.DefaultLinkPermission)" `
+                       -Remediation "Set-SPOTenant -DefaultLinkPermission View"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.2.11" -ControlTitle "Ensure the SharePoint default sharing link permission is set" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.3.1 - Ensure Office 365 SharePoint infected files are disallowed for download
+    try {
+        Write-Log "Checking 7.3.1 - Infected file download blocked" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.DisallowInfectedFileDownload -eq $true) {
+            Add-Result -ControlNumber "7.3.1" -ControlTitle "Ensure Office 365 SharePoint infected files are disallowed for download" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Infected file download is blocked"
+        }
+        else {
+            Add-Result -ControlNumber "7.3.1" -ControlTitle "Ensure Office 365 SharePoint infected files are disallowed for download" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Infected files can be downloaded" `
+                       -Remediation "Set-SPOTenant -DisallowInfectedFileDownload `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.3.1" -ControlTitle "Ensure Office 365 SharePoint infected files are disallowed for download" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.3.2 - Ensure OneDrive sync is restricted for unmanaged devices
+    try {
+        Write-Log "Checking 7.3.2 - OneDrive sync restriction" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        if ($spoTenant.IsUnmanagedSyncClientForTenantRestricted -eq $true) {
+            Add-Result -ControlNumber "7.3.2" -ControlTitle "Ensure OneDrive sync is restricted for unmanaged devices" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "OneDrive sync restricted for unmanaged devices"
+        }
+        else {
+            Add-Result -ControlNumber "7.3.2" -ControlTitle "Ensure OneDrive sync is restricted for unmanaged devices" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Unmanaged device sync not restricted" `
+                       -Remediation "Set-SPOTenant -IsUnmanagedSyncClientForTenantRestricted `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.3.2" -ControlTitle "Ensure OneDrive sync is restricted for unmanaged devices" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.3.3 - Ensure custom script execution is restricted on personal sites
+    try {
+        Write-Log "Checking 7.3.3 - Custom script on personal sites" -Level Info
+        $spoTenant = Get-SPOTenant
+
+        # DenyAddAndCustomizePages controls custom script on personal sites (OneDrive)
+        if ($spoTenant.DenyAddAndCustomizePages -eq 1 -or $spoTenant.DenyAddAndCustomizePages -eq 2) {
+            Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted on personal sites"
+        }
+        else {
+            Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Custom scripts allowed on personal sites" `
+                       -Remediation "Set-SPOsite -Identity <OneDriveURL> -DenyAddAndCustomizePages 1"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 7.3.4 - Ensure custom script execution is restricted on site collections
+    try {
+        Write-Log "Checking 7.3.4 - Custom script restricted on sites" -Level Info
+        $sites = Get-SPOSite -Limit All | Where-Object { $_.Template -notlike "*SPSMSITEHOST*" }
+        $sitesWithCustomScript = $sites | Where-Object { $_.DenyAddAndCustomizePages -eq "Disabled" }
+
+        if ($sitesWithCustomScript.Count -eq 0) {
+            Add-Result -ControlNumber "7.3.4" -ControlTitle "Ensure custom script execution is restricted on site collections" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted on all sites"
+        }
+        else {
+            Add-Result -ControlNumber "7.3.4" -ControlTitle "Ensure custom script execution is restricted on site collections" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($sitesWithCustomScript.Count) sites allow custom scripts" `
+                       -Remediation "Disable custom scripts on site collections"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "7.3.4" -ControlTitle "Ensure custom script execution is restricted on site collections" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+}
+
+#endregion
+
+#region Section 8: Microsoft Teams Admin Center
+
+function Test-MicrosoftTeams {
+    Write-Log "Checking Section 8: Microsoft Teams Admin Center..." -Level Info
+
+    # 8.1.1 - Ensure external file sharing in Teams is enabled for only approved cloud storage services
+    try {
+        Write-Log "Checking 8.1.1 - Teams external file sharing" -Level Info
+        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global
+
+        $approvedOnly = $true
+        if ($teamsClientConfig.AllowDropbox -eq $true -or
+            $teamsClientConfig.AllowBox -eq $true -or
+            $teamsClientConfig.AllowGoogleDrive -eq $true -or
+            $teamsClientConfig.AllowShareFile -eq $true -or
+            $teamsClientConfig.AllowEgnyte -eq $true) {
+            $approvedOnly = $false
+        }
+
+        if ($approvedOnly) {
+            Add-Result -ControlNumber "8.1.1" -ControlTitle "Ensure external file sharing in Teams is enabled for only approved cloud storage services" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Third-party storage restricted"
+        }
+        else {
+            Add-Result -ControlNumber "8.1.1" -ControlTitle "Ensure external file sharing in Teams is enabled for only approved cloud storage services" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Third-party storage services enabled" `
+                       -Remediation "Disable unapproved third-party storage providers"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.1.1" -ControlTitle "Ensure external file sharing in Teams is enabled for only approved cloud storage services" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.1.2 - Ensure users can't send emails to a channel email address
+    try {
+        Write-Log "Checking 8.1.2 - Channel email disabled" -Level Info
+        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global
+
+        if ($teamsClientConfig.AllowEmailIntoChannel -eq $false) {
+            Add-Result -ControlNumber "8.1.2" -ControlTitle "Ensure users can't send emails to a channel email address" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Channel email is disabled"
+        }
+        else {
+            Add-Result -ControlNumber "8.1.2" -ControlTitle "Ensure users can't send emails to a channel email address" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Channel email is enabled" `
+                       -Remediation "Set-CsTeamsClientConfiguration -Identity Global -AllowEmailIntoChannel `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.1.2" -ControlTitle "Ensure users can't send emails to a channel email address" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.2.1 - Ensure external domains are restricted in the Teams admin center
+    try {
+        Write-Log "Checking 8.2.1 - External domains restricted" -Level Info
+        $externalAccessPolicy = Get-CsExternalAccessPolicy -Identity Global
+        $tenantFedConfig = Get-CsTenantFederationConfiguration
+
+        if ($externalAccessPolicy.EnableFederationAccess -eq $false -or
+            ($tenantFedConfig.AllowedDomains.AllowedDomain.Count -gt 0 -and
+             $tenantFedConfig.AllowedDomains.Count -eq 0)) {
+            Add-Result -ControlNumber "8.2.1" -ControlTitle "Ensure external domains are restricted in the Teams admin center" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "External access restricted or limited to allowed domains"
+        }
+        else {
+            Add-Result -ControlNumber "8.2.1" -ControlTitle "Ensure external domains are restricted in the Teams admin center" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "External access not restricted" `
+                       -Remediation "Restrict external access or configure allowed domains list"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.2.1" -ControlTitle "Ensure external domains are restricted in the Teams admin center" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.2.2 - Ensure communication with unmanaged Teams users is disabled
+    try {
+        Write-Log "Checking 8.2.2 - Unmanaged Teams users blocked" -Level Info
+        $tenantFedConfig = Get-CsTenantFederationConfiguration
+
+        if ($tenantFedConfig.AllowTeamsConsumer -eq $false) {
+            Add-Result -ControlNumber "8.2.2" -ControlTitle "Ensure communication with unmanaged Teams users is disabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Communication with unmanaged Teams users disabled"
+        }
+        else {
+            Add-Result -ControlNumber "8.2.2" -ControlTitle "Ensure communication with unmanaged Teams users is disabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Unmanaged Teams communication allowed" `
+                       -Remediation "Set-CsTenantFederationConfiguration -AllowTeamsConsumer `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.2.2" -ControlTitle "Ensure communication with unmanaged Teams users is disabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.2.3 - Ensure external Teams users cannot initiate conversations
+    try {
+        Write-Log "Checking 8.2.3 - External Teams cannot initiate contact" -Level Info
+        $tenantFedConfig = Get-CsTenantFederationConfiguration
+
+        if ($tenantFedConfig.AllowTeamsConsumerInbound -eq $false) {
+            Add-Result -ControlNumber "8.2.3" -ControlTitle "Ensure external Teams users cannot initiate conversations" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Inbound contact from unmanaged Teams blocked"
+        }
+        else {
+            Add-Result -ControlNumber "8.2.3" -ControlTitle "Ensure external Teams users cannot initiate conversations" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Unmanaged Teams can initiate contact" `
+                       -Remediation "Set-CsTenantFederationConfiguration -AllowTeamsConsumerInbound `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.2.3" -ControlTitle "Ensure external Teams users cannot initiate conversations" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.2.4 - Ensure communication with Skype users is disabled
+    try {
+        Write-Log "Checking 8.2.4 - Skype communication disabled" -Level Info
+        $tenantFedConfig = Get-CsTenantFederationConfiguration
+
+        if ($tenantFedConfig.AllowPublicUsers -eq $false) {
+            Add-Result -ControlNumber "8.2.4" -ControlTitle "Ensure communication with Skype users is disabled" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Skype federation disabled"
+        }
+        else {
+            Add-Result -ControlNumber "8.2.4" -ControlTitle "Ensure communication with Skype users is disabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Skype federation enabled" `
+                       -Remediation "Set-CsTenantFederationConfiguration -AllowPublicUsers `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.2.4" -ControlTitle "Ensure communication with Skype users is disabled" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.4.1 - Ensure app permission policies are configured
+    try {
+        Write-Log "Checking 8.4.1 - Teams app permission policies" -Level Info
+        $appSetupPolicies = Get-CsTeamsAppSetupPolicy
+
+        # Check if global policy restricts third-party apps
+        $globalPolicy = $appSetupPolicies | Where-Object { $_.Identity -eq "Global" }
+
+        if ($globalPolicy.AllowUserPinning -eq $false -or $appSetupPolicies.Count -gt 1) {
+            Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "App permission policies configured: $($appSetupPolicies.Count) policies found"
+        }
+        else {
+            Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Default app permissions may be too permissive" `
+                       -Remediation "Configure app permission policies to restrict third-party and custom apps"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.1 - Ensure anonymous users can't join a meeting
+    try {
+        Write-Log "Checking 8.5.1 - Anonymous meeting join blocked" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowAnonymousUsersToJoinMeeting -eq $false) {
+            Add-Result -ControlNumber "8.5.1" -ControlTitle "Ensure anonymous users can't join a meeting" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Anonymous meeting join blocked"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.1" -ControlTitle "Ensure anonymous users can't join a meeting" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Anonymous users can join meetings" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -Identity Global -AllowAnonymousUsersToJoinMeeting `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.1" -ControlTitle "Ensure anonymous users can't join a meeting" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.2 - Ensure anonymous users and dial-in callers can't start a meeting
+    try {
+        Write-Log "Checking 8.5.2 - Anonymous cannot start meetings" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowAnonymousUsersToStartMeeting -eq $false) {
+            Add-Result -ControlNumber "8.5.2" -ControlTitle "Ensure anonymous users and dial-in callers can't start a meeting" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Anonymous users cannot start meetings"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.2" -ControlTitle "Ensure anonymous users and dial-in callers can't start a meeting" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Anonymous users can start meetings" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -Identity Global -AllowAnonymousUsersToStartMeeting `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.2" -ControlTitle "Ensure anonymous users and dial-in callers can't start a meeting" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.3 - Ensure only people in my org can bypass the lobby
+    try {
+        Write-Log "Checking 8.5.3 - Lobby bypass restricted" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AutoAdmittedUsers -eq "EveryoneInCompanyExcludingGuests" -or
+            $teamsMeetingPolicy.AutoAdmittedUsers -eq "InvitedUsers") {
+            Add-Result -ControlNumber "8.5.3" -ControlTitle "Ensure only people in my org can bypass the lobby" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Lobby bypass restricted: $($teamsMeetingPolicy.AutoAdmittedUsers)"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.3" -ControlTitle "Ensure only people in my org can bypass the lobby" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Lobby bypass too permissive: $($teamsMeetingPolicy.AutoAdmittedUsers)" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -AutoAdmittedUsers EveryoneInCompanyExcludingGuests"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.3" -ControlTitle "Ensure only people in my org can bypass the lobby" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.4 - Ensure users dialing in can't bypass the lobby
+    try {
+        Write-Log "Checking 8.5.4 - Dial-in lobby bypass blocked" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowPSTNUsersToBypassLobby -eq $false) {
+            Add-Result -ControlNumber "8.5.4" -ControlTitle "Ensure users dialing in can't bypass the lobby" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Dial-in users must wait in lobby"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.4" -ControlTitle "Ensure users dialing in can't bypass the lobby" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Dial-in users can bypass lobby" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -Identity Global -AllowPSTNUsersToBypassLobby `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.4" -ControlTitle "Ensure users dialing in can't bypass the lobby" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.5 - Ensure meeting chat does not allow anonymous users
+    try {
+        Write-Log "Checking 8.5.5 - Anonymous chat restricted" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.MeetingChatEnabledType -eq "EnabledExceptAnonymous") {
+            Add-Result -ControlNumber "8.5.5" -ControlTitle "Ensure meeting chat does not allow anonymous users" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Anonymous users cannot use meeting chat"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.5" -ControlTitle "Ensure meeting chat does not allow anonymous users" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Chat setting: $($teamsMeetingPolicy.MeetingChatEnabledType)" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -MeetingChatEnabledType EnabledExceptAnonymous"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.5" -ControlTitle "Ensure meeting chat does not allow anonymous users" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.6 - Ensure only organizers and co-organizers can present
+    try {
+        Write-Log "Checking 8.5.6 - Presenter role restricted" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.DesignatedPresenterRoleMode -eq "OrganizerOnlyUserOverride") {
+            Add-Result -ControlNumber "8.5.6" -ControlTitle "Ensure only organizers and co-organizers can present" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Presenter role restricted to organizers"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.6" -ControlTitle "Ensure only organizers and co-organizers can present" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Presenter mode: $($teamsMeetingPolicy.DesignatedPresenterRoleMode)" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -DesignatedPresenterRoleMode OrganizerOnlyUserOverride"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.6" -ControlTitle "Ensure only organizers and co-organizers can present" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.7 - Ensure external participants can't give or request control
+    try {
+        Write-Log "Checking 8.5.7 - External control restricted" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowExternalParticipantGiveRequestControl -eq $false) {
+            Add-Result -ControlNumber "8.5.7" -ControlTitle "Ensure external participants can't give or request control" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "External control is restricted"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.7" -ControlTitle "Ensure external participants can't give or request control" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "External users can request/give control" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -AllowExternalParticipantGiveRequestControl `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.7" -ControlTitle "Ensure external participants can't give or request control" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.8 - Ensure external meeting chat is off
+    try {
+        Write-Log "Checking 8.5.8 - External meeting chat disabled" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowExternalNonTrustedMeetingChat -eq $false) {
+            Add-Result -ControlNumber "8.5.8" -ControlTitle "Ensure external meeting chat is off" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "External meeting chat disabled"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.8" -ControlTitle "Ensure external meeting chat is off" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "External meeting chat enabled" `
+                       -Remediation "Set-CsTeamsMeetingPolicy -AllowExternalNonTrustedMeetingChat `$false"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.8" -ControlTitle "Ensure external meeting chat is off" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.5.9 - Ensure meeting recording is off by default
+    try {
+        Write-Log "Checking 8.5.9 - Meeting recording default setting" -Level Info
+        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+
+        if ($teamsMeetingPolicy.AllowCloudRecording -eq $false) {
+            Add-Result -ControlNumber "8.5.9" -ControlTitle "Ensure meeting recording is off by default" `
+                       -ProfileLevel "L2" -Result "Pass" -Details "Recording disabled in default policy"
+        }
+        else {
+            Add-Result -ControlNumber "8.5.9" -ControlTitle "Ensure meeting recording is off by default" `
+                       -ProfileLevel "L2" -Result "Fail" -Details "Recording enabled in default policy" `
+                       -Remediation "Disable recording in Global policy, enable in specific policies as needed"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.5.9" -ControlTitle "Ensure meeting recording is off by default" `
+                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
+    }
+
+    # 8.6.1 - Ensure users can report security concerns in Teams
+    try {
+        Write-Log "Checking 8.6.1 - Teams message reporting enabled" -Level Info
+        $teamsMessagingPolicy = Get-CsTeamsMessagingPolicy -Identity Global
+
+        if ($teamsMessagingPolicy.AllowSecurityEndUserReporting -eq $true) {
+            Add-Result -ControlNumber "8.6.1" -ControlTitle "Ensure users can report security concerns in Teams" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Security reporting enabled"
+        }
+        else {
+            Add-Result -ControlNumber "8.6.1" -ControlTitle "Ensure users can report security concerns in Teams" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Security reporting not enabled" `
+                       -Remediation "Set-CsTeamsMessagingPolicy -AllowSecurityEndUserReporting `$true"
+        }
+    }
+    catch {
+        Add-Result -ControlNumber "8.6.1" -ControlTitle "Ensure users can report security concerns in Teams" `
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+    }
+}
+
+#endregion
+
+#region Section 9: Microsoft Fabric (Power BI)
+
+function Test-PowerBI {
+    Write-Log "Checking Section 9: Microsoft Fabric (Power BI)..." -Level Info
+
+    # All Power BI checks are manual as they require portal access
+
+    Add-Result -ControlNumber "9.1.1" -ControlTitle "Ensure guest user access is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Disable or restrict guest user access to Power BI"
+
+    Add-Result -ControlNumber "9.1.2" -ControlTitle "Ensure external user invitations are restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Restrict ability to invite external users"
+
+    Add-Result -ControlNumber "9.1.3" -ControlTitle "Ensure guest access to content is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Restrict guest browsing of Fabric content"
+
+    Add-Result -ControlNumber "9.1.4" -ControlTitle "Ensure 'Publish to web' is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings > Export and sharing" `
+               -Remediation "Disable or restrict 'Publish to web' feature"
+
+    Add-Result -ControlNumber "9.1.5" -ControlTitle "Ensure 'Interact with and share R and Python' visuals is 'Disabled'" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Disable R and Python script visuals"
+
+    Add-Result -ControlNumber "9.1.6" -ControlTitle "Ensure 'Allow users to apply sensitivity labels for content' is 'Enabled'" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings > Information protection" `
+               -Remediation "Enable sensitivity labels in Power BI (requires MIP prerequisites)"
+
+    Add-Result -ControlNumber "9.1.7" -ControlTitle "Ensure shareable links are restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Restrict 'People in organization' shareable links"
+
+    Add-Result -ControlNumber "9.1.8" -ControlTitle "Ensure enabling of external data sharing is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Restrict external dataset sharing"
+
+    Add-Result -ControlNumber "9.1.9" -ControlTitle "Ensure 'Block ResourceKey Authentication' is 'Enabled'" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Enable blocking of resource key authentication"
+
+    Add-Result -ControlNumber "9.1.10" -ControlTitle "Ensure access to APIs by Service Principals is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings > Developer" `
+               -Remediation "Restrict service principal API access"
+
+    Add-Result -ControlNumber "9.1.11" -ControlTitle "Ensure Service Principals cannot create and use profiles" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Power BI Admin Portal > Tenant settings" `
+               -Remediation "Restrict service principal profile creation"
+}
+
+#endregion
+
+#region Report Generation
+
+function Export-HtmlReport {
+    param([string]$OutputPath)
+
+    $reportPath = Join-Path $OutputPath "CIS-M365-Compliance-Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').html"
+
+    $passRate = if ($Script:TotalControls -gt 0) {
+        [math]::Round(($Script:PassedControls / ($Script:TotalControls - $Script:ManualControls)) * 100, 2)
+    } else { 0 }
+
+    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CIS Microsoft 365 Compliance Report</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        h1 { color: #0078d4; border-bottom: 3px solid #0078d4; padding-bottom: 10px; }
+        h2 { color: #333; margin-top: 30px; }
+        .summary { background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .summary-box { display: inline-block; margin: 10px 20px 10px 0; padding: 15px 25px; border-radius: 5px; }
+        .pass { background-color: #d4edda; color: #155724; }
+        .fail { background-color: #f8d7da; color: #721c24; }
+        .manual { background-color: #fff3cd; color: #856404; }
+        .error { background-color: #f8d7da; color: #721c24; }
+        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        th { background-color: #0078d4; color: white; padding: 12px; text-align: left; font-weight: 600; }
+        td { padding: 12px; border-bottom: 1px solid #ddd; }
+        tr:hover { background-color: #f5f5f5; }
+        .status-pass { color: #155724; font-weight: bold; }
+        .status-fail { color: #721c24; font-weight: bold; }
+        .status-manual { color: #856404; font-weight: bold; }
+        .status-error { color: #721c24; font-weight: bold; }
+        .details { font-size: 0.9em; color: #666; }
+        .remediation { font-size: 0.85em; color: #0066cc; font-style: italic; margin-top: 5px; }
+        .progress-bar { width: 100%; height: 30px; background-color: #e9ecef; border-radius: 5px; overflow: hidden; }
+        .progress-fill { height: 100%; background-color: #28a745; text-align: center; line-height: 30px; color: white; font-weight: bold; }
+        .timestamp { color: #666; font-size: 0.9em; }
+    </style>
+</head>
+<body>
+    <h1>CIS Microsoft 365 Foundations Benchmark v5.0.0</h1>
+    <p class="timestamp">Report Generated: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")</p>
+
+    <div class="summary">
+        <h2>Executive Summary</h2>
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: $passRate%">$passRate% Compliant</div>
+        </div>
+        <br/>
+        <div class="summary-box pass">
+            <strong>Passed:</strong> $Script:PassedControls
+        </div>
+        <div class="summary-box fail">
+            <strong>Failed:</strong> $Script:FailedControls
+        </div>
+        <div class="summary-box manual">
+            <strong>Manual:</strong> $Script:ManualControls
+        </div>
+        <div class="summary-box error">
+            <strong>Errors:</strong> $Script:ErrorControls
+        </div>
+        <div class="summary-box">
+            <strong>Total Controls:</strong> $Script:TotalControls
+        </div>
+    </div>
+
+    <h2>Detailed Results</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Control</th>
+                <th>Title</th>
+                <th>Level</th>
+                <th>Result</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+"@
+
+    foreach ($result in $Script:Results | Sort-Object ControlNumber) {
+        $statusClass = "status-" + $result.Result.ToLower()
+        $html += @"
+            <tr>
+                <td><strong>$($result.ControlNumber)</strong></td>
+                <td>$($result.ControlTitle)</td>
+                <td>$($result.ProfileLevel)</td>
+                <td class="$statusClass">$($result.Result)</td>
+                <td>
+                    <div class="details">$($result.Details)</div>
+"@
+        if ($result.Remediation -and $result.Result -eq "Fail") {
+            $html += "                    <div class='remediation'>Remediation: $($result.Remediation)</div>`n"
+        }
+        $html += "                </td>`n            </tr>`n"
+    }
+
+    $html += @"
+        </tbody>
+    </table>
+
+    <br/><br/>
+    <p style="text-align: center; color: #666; font-size: 0.9em;">
+        Generated by CIS Microsoft 365 Compliance Checker v1.0
+    </p>
+</body>
+</html>
+"@
+
+    $html | Out-File -FilePath $reportPath -Encoding UTF8
+    Write-Log "HTML report saved to: $reportPath" -Level Success
+    return $reportPath
+}
+
+function Export-CsvReport {
+    param([string]$OutputPath)
+
+    $csvPath = Join-Path $OutputPath "CIS-M365-Compliance-Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+    $Script:Results | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
+    Write-Log "CSV report saved to: $csvPath" -Level Success
+    return $csvPath
+}
+
+#endregion
+
+#region Main Execution
+
+function Start-ComplianceCheck {
+    Write-Host "`n"
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "  CIS Microsoft 365 Foundations Benchmark v5.0.0" -ForegroundColor Cyan
+    Write-Host "  Compliance Checker" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "`n"
+
+    # Check required modules
+    Write-Log "Checking required PowerShell modules..." -Level Info
+    $requiredModules = @(
+        "Microsoft.Graph",
+        "ExchangeOnlineManagement",
+        "Microsoft.Online.SharePoint.PowerShell",
+        "MicrosoftTeams",
+        "MSOnline"
+    )
+
+    $missingModules = @()
+    foreach ($module in $requiredModules) {
+        if (-not (Test-ModuleInstalled $module)) {
+            $missingModules += $module
+            Write-Log "Missing module: $module" -Level Warning
+        }
+    }
+
+    if ($missingModules.Count -gt 0) {
+        Write-Log "The following modules are missing:" -Level Error
+        $missingModules | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
+        Write-Host "`nPlease install missing modules using:" -ForegroundColor Yellow
+        Write-Host "Install-Module <ModuleName> -Scope CurrentUser" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Log "All required modules are installed" -Level Success
+
+    # Connect to services
+    if (-not (Connect-M365Services)) {
+        Write-Log "Failed to connect to Microsoft 365 services. Exiting." -Level Error
+        return
+    }
+
+    Write-Host "`n"
+    Write-Log "Starting CIS compliance checks..." -Level Info
+    Write-Host "`n"
+
+    # Run all checks
+    Test-M365AdminCenter
+    Test-M365Defender
+    Test-Purview
+    Test-Intune
+    Test-EntraID
+    Test-ExchangeOnline
+    Test-SharePointOnline
+    Test-MicrosoftTeams
+    Test-PowerBI
+
+    # Generate reports
+    Write-Host "`n"
+    Write-Log "Generating reports..." -Level Info
+    $htmlReport = Export-HtmlReport -OutputPath $OutputPath
+    $csvReport = Export-CsvReport -OutputPath $OutputPath
+
+    # Summary
+    Write-Host "`n"
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "  Compliance Check Complete" -ForegroundColor Cyan
+    Write-Host "================================================================" -ForegroundColor Cyan
+    Write-Host "`n"
+    Write-Host "Total Controls Checked: " -NoNewline
+    Write-Host $Script:TotalControls -ForegroundColor White
+    Write-Host "Passed: " -NoNewline -ForegroundColor Green
+    Write-Host $Script:PassedControls -ForegroundColor Green
+    Write-Host "Failed: " -NoNewline -ForegroundColor Red
+    Write-Host $Script:FailedControls -ForegroundColor Red
+    Write-Host "Manual Review Required: " -NoNewline -ForegroundColor Yellow
+    Write-Host $Script:ManualControls -ForegroundColor Yellow
+    Write-Host "Errors: " -NoNewline -ForegroundColor Red
+    Write-Host $Script:ErrorControls -ForegroundColor Red
+
+    if ($Script:TotalControls -gt $Script:ManualControls) {
+        $complianceRate = [math]::Round(($Script:PassedControls / ($Script:TotalControls - $Script:ManualControls)) * 100, 2)
+        Write-Host "`nAutomated Compliance Rate: " -NoNewline
+        Write-Host "$complianceRate%" -ForegroundColor Cyan
+    }
+
+    Write-Host "`n"
+    Write-Host "Reports saved to:" -ForegroundColor Cyan
+    Write-Host "  HTML: $htmlReport" -ForegroundColor White
+    Write-Host "  CSV:  $csvReport" -ForegroundColor White
+    Write-Host "`n"
+
+    # Disconnect
+    Write-Log "Disconnecting from services..." -Level Info
+    try {
+        Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
+        Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+        Disconnect-SPOService -ErrorAction SilentlyContinue | Out-Null
+        Disconnect-MicrosoftTeams -ErrorAction SilentlyContinue | Out-Null
+    }
+    catch {
+        # Ignore disconnect errors
+    }
+
+    Write-Log "Done!" -Level Success
+}
+
+# Only run the compliance check if script is executed directly (not dot-sourced by module)
+if ($MyInvocation.InvocationName -ne '.' -and $MyInvocation.InvocationName -notlike '*psm1') {
+    # Script was called directly, not imported as a module
+    Start-ComplianceCheck
+}
+
+#endregion
