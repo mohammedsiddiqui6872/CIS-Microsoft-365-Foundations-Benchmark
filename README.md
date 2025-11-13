@@ -179,41 +179,59 @@ The script performs comprehensive checks across **9 major sections**:
 # Step 1: Install the module
 Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser
 
-# Step 2: Run compliance check (that's it!)
-Invoke-CISBenchmark -TenantDomain "your-tenant.onmicrosoft.com" `
-                    -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
+# Step 2: Authenticate to Microsoft 365
+Connect-CISBenchmark
 
-# All prerequisites install automatically on first run!
+# Step 3: Run compliance check (auto-detects tenant info!)
+Invoke-CISBenchmark
+
+# That's it! All prerequisites install automatically on first run.
 ```
 
-> **New in v2.2.1:** Prerequisites install automatically! No manual module installation needed.
+> **New in v2.3.2:** Dedicated `Connect-CISBenchmark` function for easy authentication!
+> **New in v2.3.0:** Zero-parameter usage - tenant info is auto-detected!
 
 ### What Happens Behind the Scenes
 
-When you run `Invoke-CISBenchmark` for the first time, the module automatically:
-1. Detects missing prerequisite modules
-2. Installs them silently with progress feedback:
-   - Microsoft.Graph
-   - ExchangeOnlineManagement
-   - Microsoft.Online.SharePoint.PowerShell
-   - MicrosoftTeams
-   - MSOnline (optional legacy module)
-3. Proceeds with compliance checks
+When you run the commands for the first time, the module automatically:
 
-### Manual Installation (Optional)
+1. **On `Connect-CISBenchmark`:**
+   - Opens browser window for Microsoft 365 sign-in
+   - Authenticates to Microsoft Graph with required permissions
+   - Establishes secure session for compliance checks
 
-If you prefer to install prerequisites manually:
+2. **On `Invoke-CISBenchmark`:**
+   - Auto-detects your tenant domain and SharePoint admin URL
+   - Detects missing prerequisite modules
+   - Installs them silently with progress feedback:
+     - Microsoft.Graph (if not already loaded)
+     - ExchangeOnlineManagement
+     - Microsoft.Online.SharePoint.PowerShell
+     - MicrosoftTeams
+     - MSOnline (optional legacy module)
+   - Proceeds with compliance checks
+
+### Alternative Authentication Methods
 
 ```powershell
-# Install the module
-Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser
+# Use device code authentication (for remote sessions or MFA issues)
+Connect-CISBenchmark -UseDeviceCode
 
-# Import and check prerequisites
-Import-Module CIS-M365-Benchmark
-Test-CISBenchmarkPrerequisites
+# Then run the assessment
+Invoke-CISBenchmark
+```
 
-# Install missing modules manually
-Install-CISBenchmarkPrerequisites
+### Manual Parameters (Optional)
+
+If auto-detection doesn't work, you can still specify parameters manually:
+
+```powershell
+# Authenticate first
+Connect-CISBenchmark
+
+# Run with manual parameters
+Invoke-CISBenchmark -TenantDomain "your-tenant.onmicrosoft.com" `
+                    -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
 ```
 
 ### Alternative: Clone from GitHub
@@ -223,9 +241,14 @@ Install-CISBenchmarkPrerequisites
 git clone https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0.git
 cd CIS-Microsoft-365-Foundations-Benchmark-v5.0.0
 
-# Run the script directly (prerequisites install automatically)
-.\CIS-M365-Compliance-Checker.ps1 -TenantDomain "your-tenant.onmicrosoft.com" `
-                                   -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
+# Import the module
+Import-Module .\CIS-M365-Benchmark\CIS-M365-Benchmark.psd1
+
+# Authenticate
+Connect-CISBenchmark
+
+# Run assessment (prerequisites install automatically)
+Invoke-CISBenchmark
 ```
 
 ## 🔧 Prerequisites
@@ -274,7 +297,7 @@ Your account needs the following permissions:
 After installing the module, you can use the following commands:
 
 ```powershell
-# Import the module
+# Import the module (optional - auto-imports when you run commands)
 Import-Module CIS-M365-Benchmark
 
 # See available commands
@@ -286,51 +309,69 @@ Get-CISBenchmarkInfo
 # Check which prerequisite modules are installed
 Test-CISBenchmarkPrerequisites
 
-# Install missing prerequisite modules (New in v2.2.0!)
-Install-CISBenchmarkPrerequisites
+# Get help on authentication
+Get-Help Connect-CISBenchmark -Full
 
-# Install without prompts (for automation)
-Install-CISBenchmarkPrerequisites -Force
-
-# Get help on a specific command
+# Get help on running assessments
 Get-Help Invoke-CISBenchmark -Full
 ```
 
 ### Basic Usage
 
 ```powershell
-# Run all compliance checks
-Invoke-CISBenchmark `
-    -TenantDomain "contoso.onmicrosoft.com" `
-    -SharePointAdminUrl "https://contoso-admin.sharepoint.com"
+# Step 1: Authenticate to Microsoft 365
+Connect-CISBenchmark
+
+# Step 2: Run all compliance checks (auto-detects tenant info)
+Invoke-CISBenchmark
 ```
 
 ### Advanced Usage
 
 ```powershell
+# Authenticate first
+Connect-CISBenchmark
+
 # Check only L1 (baseline) controls
-Invoke-CISBenchmark `
-    -TenantDomain "contoso.onmicrosoft.com" `
-    -SharePointAdminUrl "https://contoso-admin.sharepoint.com" `
-    -ProfileLevel "L1"
+Invoke-CISBenchmark -ProfileLevel "L1"
 
 # Check only L2 (enhanced security) controls
-Invoke-CISBenchmark `
-    -TenantDomain "contoso.onmicrosoft.com" `
-    -SharePointAdminUrl "https://contoso-admin.sharepoint.com" `
-    -ProfileLevel "L2"
+Invoke-CISBenchmark -ProfileLevel "L2"
 
 # Custom output path
-Invoke-CISBenchmark `
-    -TenantDomain "contoso.onmicrosoft.com" `
-    -SharePointAdminUrl "https://contoso-admin.sharepoint.com" `
-    -OutputPath "C:\CIS-Reports"
+Invoke-CISBenchmark -OutputPath "C:\CIS-Reports"
 
 # Run with verbose output
+Invoke-CISBenchmark -Verbose
+
+# Combine multiple options
+Invoke-CISBenchmark -ProfileLevel "L1" -OutputPath "C:\CIS-Reports" -Verbose
+```
+
+### Manual Tenant Specification
+
+If auto-detection doesn't work, specify tenant details manually:
+
+```powershell
+# Authenticate
+Connect-CISBenchmark
+
+# Run with manual parameters
 Invoke-CISBenchmark `
     -TenantDomain "contoso.onmicrosoft.com" `
-    -SharePointAdminUrl "https://contoso-admin.sharepoint.com" `
-    -Verbose
+    -SharePointAdminUrl "https://contoso-admin.sharepoint.com"
+```
+
+### Device Code Authentication
+
+For remote sessions, Azure Cloud Shell, or MFA issues:
+
+```powershell
+# Use device code flow
+Connect-CISBenchmark -UseDeviceCode
+
+# Then run assessment
+Invoke-CISBenchmark
 ```
 
 ### Legacy Script Usage
@@ -400,11 +441,32 @@ Reports saved to:
 
 ### Common Issues
 
+**Issue: "Connect-CISBenchmark is not recognized"**
+- **Solution**: Make sure you've installed the latest version:
+  ```powershell
+  Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser -Force
+  Import-Module CIS-M365-Benchmark -Force
+  ```
+
+**Issue: Authentication browser window doesn't open**
+- **Solution**: Use device code authentication instead:
+  ```powershell
+  Connect-CISBenchmark -UseDeviceCode
+  ```
+
+**Issue: "Tenant domain is empty" error**
+- **Solution**: Ensure you've authenticated first with `Connect-CISBenchmark`, or specify parameters manually:
+  ```powershell
+  Connect-CISBenchmark
+  Invoke-CISBenchmark -TenantDomain "your-tenant.onmicrosoft.com" `
+                      -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
+  ```
+
 **Issue: Multiple sign-in prompts**
-- **Solution**: This is normal. Each M365 service (Graph, Exchange, SharePoint, Teams) may prompt separately. Keep your browser window open after the first authentication to help reduce prompts.
+- **Solution**: This is normal. Each M365 service (Graph, Exchange, SharePoint, Teams) may prompt separately. The initial `Connect-CISBenchmark` handles Microsoft Graph, but other services authenticate during the assessment.
 
 **Issue: "Module not found" error**
-- **Solution**: Install missing modules:
+- **Solution**: Prerequisites install automatically, but if you encounter issues, install manually:
   ```powershell
   Install-Module -Name <ModuleName> -Scope CurrentUser -Force
   ```
