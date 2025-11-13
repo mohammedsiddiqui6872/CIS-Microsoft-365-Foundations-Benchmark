@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.2'
+ModuleVersion = '2.3.3'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,51 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.3 - Enhanced HTML Reports with Floating Action Buttons
+
+### Major Enhancement - Modern Interactive Report Design
+
+**NEW: Floating Action Buttons & Compact Footer**
+
+We've completely redesigned the HTML report interface to match modern web application standards with chatbot-style floating action buttons.
+
+### New Features
+
+- **Floating Action Buttons**: Five beautifully designed circular buttons fixed to the right side of the screen
+  - View on GitHub - Direct link to repository
+  - Report Issues - Quick access to issue tracker
+  - Submit Feedback - Open new issue form
+  - Let's Chat! - Connect via LinkedIn
+  - Buy Me a Coffee - Support the project
+- **Professional SVG Icons**: Cross-browser compatible vector icons with smooth hover animations
+- **Interactive Tooltips**: Hover over buttons to see descriptive tooltips
+- **Gradient Backgrounds**: Modern gradient effects with glow on hover
+- **Compact Footer**: Single-line footer with essential information (toolkit name, date, control count, user)
+- **Tenant Context Display**: Shows tenant ID and authenticated user in report header
+- **Consistent Styling**: Dark theme (#0a0a0c background, #60a5fa accents) across all reports
+
+### Visual Enhancements
+
+- **Fixed Positioning**: Action buttons remain accessible while scrolling through long reports
+- **Smooth Animations**: Scale and glow effects on hover for better user experience
+- **Responsive Design**: Works seamlessly on all screen sizes
+- **Professional Appearance**: Matches enterprise-grade security dashboards
+
+### Benefits
+
+- **Easier Access**: Quick links to documentation and support without scrolling to footer
+- **Better UX**: Chatbot-style interface familiar to modern web users
+- **More Engagement**: Prominent calls-to-action for feedback and support
+- **Professional**: Enterprise-quality design for security compliance reports
+
+### Technical Details
+
+- All icons use inline SVG for maximum compatibility
+- CSS transitions for smooth hover effects
+- Z-index positioning ensures buttons stay on top
+- Tooltips use CSS pseudo-elements (no JavaScript required)
+- Single-line footer reduces vertical space usage by 50%
+
 ## v2.3.2 - New Connect-CISBenchmark Function + Enhanced Authentication
 
 ### Major Enhancement - Dedicated Authentication Function
