@@ -189,8 +189,6 @@ Invoke-CISBenchmark
 # That's it! All prerequisites install automatically on first run.
 ```
 
-> **New in v2.3.2:** Dedicated `Connect-CISBenchmark` function for easy authentication!
-> **New in v2.3.0:** Zero-parameter usage - tenant info is auto-detected!
 
 ### What Happens Behind the Scenes
 
