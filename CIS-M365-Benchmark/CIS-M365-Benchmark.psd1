@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.4'
+ModuleVersion = '2.3.5'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,23 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.5 - Bug Fix Release
+
+### Critical Fix
+- **Fixed ProfileLevel Parameter**: The -ProfileLevel parameter now correctly filters controls
+  - ProfileLevel="L1" now shows ONLY L1 controls (previously showed L2 as well)
+  - ProfileLevel="L2" now shows ONLY L2 controls
+  - ProfileLevel="All" continues to show all controls (default)
+
+### Bug Details
+User reported that when running `Invoke-CISBenchmark -ProfileLevel "L1"`, the report was still including L2 controls. This has been fixed by adding proper filtering logic in the Add-Result function.
+
+### Repository Cleanup
+- Cleaned up temporary development files from repository
+- Updated .gitignore to prevent future temporary files
+- Simplified CHANGELOG to show only current version information
+- Added Buy Me a Coffee support badge
+
 ## v2.3.4 - Cleanup Release
 
 ### Changes
