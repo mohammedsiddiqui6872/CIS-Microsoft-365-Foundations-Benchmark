@@ -6,10 +6,10 @@
 
 .DESCRIPTION
     PowerShell module for auditing Microsoft 365 environments against CIS Benchmark v5.0.0.
-    Provides cmdlets for running compliance checks and generating reports.
+    Provides cmdlets for running compliance checks and generating reports with zero false positives.
 
 .NOTES
-    Version: 2.3.0
+    Version: 2.4.0
     Author: Mohammed Siddiqui
     Copyright: (c) 2025 Mohammed Siddiqui. MIT License.
 #>
