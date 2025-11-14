@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.9'
+ModuleVersion = '2.4.0'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,15 +122,20 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
-## v2.3.9 - Critical False Positive Fixes (Batch 1 of 2)
+## v2.4.0 - Critical False Positive Fixes (Batch 2 - COMPLETE)
 
-Fixed FOUR critical false positive controls:
-- Control 5.2.2.12: Device code flow - Now checks CA policy with authentication flows (was checking wrong property)
-- Control 7.3.3: Custom scripts on personal sites - Now samples actual OneDrive sites (was only checking tenant default)
-- Control 2.4.4: ZAP for Teams - Now uses Get-TeamsProtectionPolicy.ZapEnabled (was duplicate of 2.1.5)
-- Control 6.1.2: Mailbox audit actions - Now validates actual audit actions per mailbox (was only checking if enabled)
-
-More fixes coming in v2.4.0 (CA policies, Teams, SharePoint controls).
+Fixed ELEVEN additional controls to eliminate false positives:
+- 5.2.2.4: Admin sign-in frequency now validates actual value (≤4 hours)
+- 5.2.2.10: MFA registration now validates managed device requirement
+- 5.2.2.11: Intune enrollment now validates "every time" frequency
+- 5.2.3.6: System-preferred MFA fixed hashtable property access
+- 6.5.3: OWA storage providers checks all policies (not hardcoded name)
+- 8.2.1: Teams external domains fixed contradictory logic
+- 7.2.4: OneDrive sharing accepts ExternalUserSharingOnly
+- 8.4.1: Teams app policies uses correct cmdlet (AppPermissionPolicy)
+- 5.2.2.3: Legacy auth enhanced client type validation
+- 7.3.4: Site custom scripts improved filtering
+- CA Enhancements: Report-only detection + exclusion warnings
 
 ## v2.3.8 - Multiple Critical Fixes for False Positives
 

@@ -2,7 +2,35 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker.
 
-## [2.3.9] - Current Version
+## [2.4.0] - Current Version
+
+### Critical False Positive Fixes - Batch 2 (Complete)
+
+**Fixed ELEVEN Additional Controls**:
+
+1. **Control 5.2.2.4 - Admin Sign-In Frequency**: Now validates actual frequency value (≤4 hours) instead of just checking if property exists. Accepts hours ≤4, 1 day, or "every time" as compliant.
+
+2. **Control 5.2.2.10 - MFA Registration Managed Device**: Now validates policy actually requires compliant/domain-joined device. Previous implementation only checked if policy targeting MFA registration existed.
+
+3. **Control 5.2.2.11 - Intune Enrollment Frequency**: Now validates frequency is set to "every time" (most restrictive). Previous implementation only checked if policy existed.
+
+4. **Control 5.2.3.6 - System-Preferred MFA**: Fixed hashtable property access using AdditionalProperties for beta API. Now properly detects enabled/disabled/default states.
+
+5. **Control 6.5.3 - OWA Storage Providers**: Now checks ALL OWA mailbox policies instead of hardcoded "OwaMailboxPolicy-Default" which may not exist in all tenants.
+
+6. **Control 8.2.1 - Teams External Domains**: Fixed contradictory logic. Now properly checks federation access, allowed domains, and blocked domains configurations.
+
+7. **Control 7.2.4 - OneDrive Sharing**: Now accepts "ExternalUserSharingOnly" (New and existing guests) as compliant per CIS Benchmark, consistent with Control 7.2.3.
+
+8. **Control 8.4.1 - Teams App Policies**: Fixed wrong cmdlet. Now uses `Get-CsTeamsAppPermissionPolicy` (not AppSetupPolicy) and checks DefaultCatalogAppsType and GlobalCatalogAppsType.
+
+9. **Control 5.2.2.3 - Legacy Auth Blocking**: Enhanced validation to check both "exchangeActiveSync" and "other" client types, or policies with 4+ client types for comprehensive coverage.
+
+10. **Control 7.3.4 - Site Custom Scripts**: Improved filtering to exclude personal sites, redirect sites, app catalog, content type hub, and search centers where DenyAddAndCustomizePages doesn't apply.
+
+11. **CA Policy Enhancements**: Added report-only mode detection and exclusion warnings to Controls 5.2.2.1 and 5.2.2.2. Policies in "enabledForReportingButNotEnforced" state now trigger failures with specific remediation.
+
+## [2.3.9] - Previous Version
 
 ### Critical False Positive Fixes - Batch 1
 

@@ -1156,25 +1156,47 @@ function Test-EntraID {
     try {
         Write-Log "Checking 5.2.2.1 - MFA for admin roles" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy
-        $adminMfaPolicy = $false
+        $adminMfaPolicy = $null
 
         foreach ($policy in $caPolicies) {
+            # Check for enabled policies (not report-only) requiring MFA for admin roles
             if ($policy.State -eq "enabled" -and
                 $policy.Conditions.Users.IncludeRoles -and
                 $policy.GrantControls.BuiltInControls -contains "mfa") {
-                $adminMfaPolicy = $true
+                $adminMfaPolicy = $policy
                 break
             }
         }
 
         if ($adminMfaPolicy) {
+            # Warn if policy has exclusions but still pass
+            $exclusionWarning = ""
+            if ($adminMfaPolicy.Conditions.Users.ExcludeUsers -or $adminMfaPolicy.Conditions.Users.ExcludeRoles) {
+                $exclusionCount = ($adminMfaPolicy.Conditions.Users.ExcludeUsers.Count + $adminMfaPolicy.Conditions.Users.ExcludeRoles.Count)
+                $exclusionWarning = " (Warning: $exclusionCount exclusions)"
+            }
+
             Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for admin roles exists"
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for admin roles exists$exclusionWarning"
         }
         else {
-            Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for admin roles" `
-                       -Remediation "Create CA policy requiring MFA for all administrative roles"
+            # Check if there's a report-only policy
+            $reportOnlyPolicy = $caPolicies | Where-Object {
+                $_.State -eq "enabledForReportingButNotEnforced" -and
+                $_.Conditions.Users.IncludeRoles -and
+                $_.GrantControls.BuiltInControls -contains "mfa"
+            }
+
+            if ($reportOnlyPolicy) {
+                Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "CA policy exists but is in report-only mode (not enforced)" `
+                           -Remediation "Change policy state from 'Report-only' to 'On' to enforce MFA for admin roles"
+            }
+            else {
+                Add-Result -ControlNumber "5.2.2.1" -ControlTitle "Ensure multifactor authentication is enabled for all users in administrative roles" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for admin roles" `
+                           -Remediation "Create CA policy requiring MFA for all administrative roles"
+            }
         }
     }
     catch {
@@ -1186,25 +1208,44 @@ function Test-EntraID {
     try {
         Write-Log "Checking 5.2.2.2 - MFA for all users" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy
-        $allUserMfaPolicy = $false
+        $allUserMfaPolicy = $null
 
         foreach ($policy in $caPolicies) {
             if ($policy.State -eq "enabled" -and
                 ($policy.Conditions.Users.IncludeUsers -contains "All" -or $policy.Conditions.Users.IncludeGroups) -and
                 $policy.GrantControls.BuiltInControls -contains "mfa") {
-                $allUserMfaPolicy = $true
+                $allUserMfaPolicy = $policy
                 break
             }
         }
 
         if ($allUserMfaPolicy) {
+            $exclusionWarning = ""
+            if ($allUserMfaPolicy.Conditions.Users.ExcludeUsers -or $allUserMfaPolicy.Conditions.Users.ExcludeGroups) {
+                $exclusionCount = ($allUserMfaPolicy.Conditions.Users.ExcludeUsers.Count + $allUserMfaPolicy.Conditions.Users.ExcludeGroups.Count)
+                $exclusionWarning = " (Warning: $exclusionCount exclusions)"
+            }
+
             Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for all users exists"
+                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy requiring MFA for all users exists$exclusionWarning"
         }
         else {
-            Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for all users" `
-                       -Remediation "Create CA policy requiring MFA for all users"
+            $reportOnlyPolicy = $caPolicies | Where-Object {
+                $_.State -eq "enabledForReportingButNotEnforced" -and
+                ($_.Conditions.Users.IncludeUsers -contains "All" -or $_.Conditions.Users.IncludeGroups) -and
+                $_.GrantControls.BuiltInControls -contains "mfa"
+            }
+
+            if ($reportOnlyPolicy) {
+                Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "CA policy exists but is in report-only mode (not enforced)" `
+                           -Remediation "Change policy state from 'Report-only' to 'On' to enforce MFA for all users"
+            }
+            else {
+                Add-Result -ControlNumber "5.2.2.2" -ControlTitle "Ensure multifactor authentication is enabled for all users" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring MFA for all users" `
+                           -Remediation "Create CA policy requiring MFA for all users"
+            }
         }
     }
     catch {
@@ -1216,26 +1257,39 @@ function Test-EntraID {
     try {
         Write-Log "Checking 5.2.2.3 - Block legacy authentication" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy
-        $legacyAuthBlockPolicy = $false
+        $legacyAuthBlockPolicy = $null
+
+        # All legacy auth client app types that should be blocked
+        $legacyAuthTypes = @("exchangeActiveSync", "other")
 
         foreach ($policy in $caPolicies) {
             if ($policy.State -eq "enabled" -and
-                $policy.Conditions.ClientAppTypes -contains "exchangeActiveSync" -and
-                $policy.Conditions.ClientAppTypes -contains "other" -and
                 $policy.GrantControls.BuiltInControls -contains "block") {
-                $legacyAuthBlockPolicy = $true
-                break
+
+                # Check if policy targets legacy auth client types
+                $hasExchangeActiveSync = $policy.Conditions.ClientAppTypes -contains "exchangeActiveSync"
+                $hasOther = $policy.Conditions.ClientAppTypes -contains "other"
+
+                # Policy should block both EAS and "other" (which includes legacy protocols)
+                # OR use broader client app conditions
+                if (($hasExchangeActiveSync -and $hasOther) -or
+                    ($policy.Conditions.ClientAppTypes.Count -ge 4)) {
+                    # If 4+ client types specified, likely comprehensive policy
+                    $legacyAuthBlockPolicy = $policy
+                    break
+                }
             }
         }
 
         if ($legacyAuthBlockPolicy) {
+            $clientTypes = $legacyAuthBlockPolicy.Conditions.ClientAppTypes -join ", "
             Add-Result -ControlNumber "5.2.2.3" -ControlTitle "Enable Conditional Access policies to block legacy authentication" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy blocking legacy authentication exists"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Legacy auth blocked (Policy: $($legacyAuthBlockPolicy.DisplayName), Client types: $clientTypes)"
         }
         else {
             Add-Result -ControlNumber "5.2.2.3" -ControlTitle "Enable Conditional Access policies to block legacy authentication" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy blocking legacy authentication" `
-                       -Remediation "Create CA policy to block legacy authentication protocols"
+                       -ProfileLevel "L1" -Result "Fail" -Details "No CA policy blocking legacy authentication (ExchangeActiveSync and Other)" `
+                       -Remediation "Create CA policy to block legacy authentication protocols (include exchangeActiveSync and other client app types)"
         }
     }
     catch {
@@ -1247,26 +1301,50 @@ function Test-EntraID {
     try {
         Write-Log "Checking 5.2.2.4 - Admin sign-in frequency" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy
-        $adminSignInPolicy = $false
+        $compliantPolicy = $null
 
         foreach ($policy in $caPolicies) {
             if ($policy.State -eq "enabled" -and
                 $policy.Conditions.Users.IncludeRoles -and
                 $policy.SessionControls.SignInFrequency -and
                 $policy.SessionControls.PersistentBrowser.Mode -eq "never") {
-                $adminSignInPolicy = $true
-                break
+
+                # Validate sign-in frequency is appropriate (4 hours or less)
+                $signInFreq = $policy.SessionControls.SignInFrequency
+                $isCompliant = $false
+
+                if ($signInFreq.IsEnabled -eq $true) {
+                    # Check frequency value and type
+                    if ($signInFreq.Type -eq "hours" -and $signInFreq.Value -le 4) {
+                        $isCompliant = $true
+                    }
+                    elseif ($signInFreq.Type -eq "days" -and $signInFreq.Value -eq 1) {
+                        # 1 day (24 hours) is acceptable but not ideal
+                        $isCompliant = $true
+                    }
+                    elseif ($signInFreq.FrequencyInterval -eq "everyTime") {
+                        # Every time is most secure
+                        $isCompliant = $true
+                    }
+                }
+
+                if ($isCompliant) {
+                    $compliantPolicy = $policy
+                    break
+                }
             }
         }
 
-        if ($adminSignInPolicy) {
+        if ($compliantPolicy) {
+            $freq = $compliantPolicy.SessionControls.SignInFrequency
+            $freqDetails = if ($freq.FrequencyInterval -eq "everyTime") { "Every time" } else { "$($freq.Value) $($freq.Type)" }
             Add-Result -ControlNumber "5.2.2.4" -ControlTitle "Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Admin sign-in frequency policy configured"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Admin sign-in frequency: $freqDetails, Persistent browser: Never (Policy: $($compliantPolicy.DisplayName))"
         }
         else {
             Add-Result -ControlNumber "5.2.2.4" -ControlTitle "Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Admin sign-in frequency policy not configured" `
-                       -Remediation "Create CA policy with sign-in frequency for admins"
+                       -ProfileLevel "L1" -Result "Fail" -Details "No compliant admin sign-in frequency policy found (must be ≤4 hours)" `
+                       -Remediation "Create CA policy: Target admin roles > Session > Sign-in frequency ≤4 hours > Persistent browser: Never"
         }
     }
     catch {
@@ -1375,19 +1453,27 @@ function Test-EntraID {
         Write-Log "Checking 5.2.2.10 - Managed device for MFA registration" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
 
+        # Find policy that targets MFA registration AND requires managed device
         $mfaRegistrationPolicy = $caPolicies | Where-Object {
             $_.Conditions.Applications.IncludeUserActions -contains "urn:user:registersecurityinfo" -and
-            $_.State -eq "enabled"
+            $_.State -eq "enabled" -and
+            ($_.GrantControls.BuiltInControls -contains "compliantDevice" -or
+             $_.GrantControls.BuiltInControls -contains "domainJoinedDevice")
         }
 
         if ($mfaRegistrationPolicy) {
+            $deviceRequirement = if ($mfaRegistrationPolicy.GrantControls.BuiltInControls -contains "compliantDevice") {
+                "Compliant device"
+            } else {
+                "Domain-joined device"
+            }
             Add-Result -ControlNumber "5.2.2.10" -ControlTitle "Ensure a managed device is required to register security information" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy for MFA registration found: $($mfaRegistrationPolicy.DisplayName)"
+                       -ProfileLevel "L1" -Result "Pass" -Details "MFA registration requires managed device: $deviceRequirement (Policy: $($mfaRegistrationPolicy.DisplayName))"
         }
         else {
             Add-Result -ControlNumber "5.2.2.10" -ControlTitle "Ensure a managed device is required to register security information" `
                        -ProfileLevel "L1" -Result "Fail" -Details "No CA policy requiring managed device for MFA registration" `
-                       -Remediation "Create CA policy targeting 'Register security information' user action"
+                       -Remediation "Create CA policy targeting 'Register security information' user action with compliant or domain-joined device requirement"
         }
     }
     catch {
@@ -1400,15 +1486,41 @@ function Test-EntraID {
         Write-Log "Checking 5.2.2.11 - Intune enrollment sign-in frequency" -Level Info
         $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
 
+        # Find policy targeting Intune enrollment with 'every time' sign-in frequency
         $intuneEnrollmentPolicy = $caPolicies | Where-Object {
             ($_.Conditions.Applications.IncludeApplications -contains "d4ebce55-015a-49b5-a083-c84d1797ae8c" -or  # Intune Enrollment
              $_.Conditions.Applications.IncludeApplications -contains "0000000a-0000-0000-c000-000000000000") -and  # Intune
-            $_.State -eq "enabled"
+            $_.State -eq "enabled" -and
+            $_.SessionControls.SignInFrequency -ne $null
         }
 
         if ($intuneEnrollmentPolicy) {
-            Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "CA policy for Intune enrollment found: $($intuneEnrollmentPolicy.DisplayName)"
+            $signInFreq = $intuneEnrollmentPolicy.SessionControls.SignInFrequency
+
+            # Check if frequency is set to 'every time' (most restrictive)
+            $isEveryTime = $false
+            $frequencyDetails = ""
+
+            if ($signInFreq.FrequencyInterval -eq "everyTime") {
+                $isEveryTime = $true
+                $frequencyDetails = "Sign-in frequency: Every time"
+            }
+            elseif ($signInFreq.IsEnabled -eq $true) {
+                $frequencyDetails = "Sign-in frequency: $($signInFreq.Value) $($signInFreq.Type)"
+            }
+            else {
+                $frequencyDetails = "Sign-in frequency: Not configured properly"
+            }
+
+            if ($isEveryTime) {
+                Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "$frequencyDetails (Policy: $($intuneEnrollmentPolicy.DisplayName))"
+            }
+            else {
+                Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "$frequencyDetails - Should be 'Every time' (Policy: $($intuneEnrollmentPolicy.DisplayName))" `
+                           -Remediation "Update CA policy to set sign-in frequency to 'Every time' for Intune enrollment"
+            }
         }
         else {
             Add-Result -ControlNumber "5.2.2.11" -ControlTitle "Ensure sign-in frequency for Intune Enrollment is set to 'Every time'" `
@@ -1584,20 +1696,33 @@ function Test-EntraID {
         Write-Log "Checking 5.2.3.6 - System-preferred MFA" -Level Info
         $authMethodsPolicy = Get-MgPolicyAuthenticationMethodPolicy
 
-        # Check if system-preferred MFA is enabled in the policy
-        if ($authMethodsPolicy.SystemCredentialPreferences.State -eq "enabled") {
+        # System credential preferences - use hashtable key access for Graph API beta properties
+        $systemCredPrefs = $authMethodsPolicy.AdditionalProperties['systemCredentialPreferences']
+
+        # Check if system-preferred MFA is enabled
+        if ($systemCredPrefs -and $systemCredPrefs['state'] -eq "enabled") {
             Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
                        -ProfileLevel "L1" -Result "Pass" -Details "System-preferred MFA is enabled"
         }
+        elseif ($systemCredPrefs -and $systemCredPrefs['state'] -eq "disabled") {
+            Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "System-preferred MFA is disabled" `
+                       -Remediation "Enable system-preferred MFA in Entra ID > Security > Authentication methods > Settings"
+        }
+        elseif ($systemCredPrefs -and $systemCredPrefs['state'] -eq "default") {
+            Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "System-preferred MFA is set to default (not explicitly enabled)" `
+                       -Remediation "Enable system-preferred MFA in Entra ID > Security > Authentication methods > Settings"
+        }
         else {
             Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "System-preferred MFA is not enabled" `
-                       -Remediation "Enable system-preferred MFA in Entra ID > Security > Authentication methods > Settings"
+                       -ProfileLevel "L1" -Result "Manual" -Details "Unable to determine system-preferred MFA state. Verify manually." `
+                       -Remediation "Check Entra ID > Security > Authentication methods > Settings"
         }
     }
     catch {
         Add-Result -ControlNumber "5.2.3.6" -ControlTitle "Ensure system-preferred multifactor authentication is enabled" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check system-preferred MFA. Verify manually." `
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check system-preferred MFA: $_" `
                    -Remediation "Check Entra ID > Security > Authentication methods > Settings"
     }
 
@@ -2001,16 +2126,25 @@ function Test-ExchangeOnline {
     # 6.5.3 - Ensure additional storage providers are restricted in Outlook on the web
     try {
         Write-Log "Checking 6.5.3 - OWA storage providers restricted" -Level Info
-        $owaPolicy = Get-OwaMailboxPolicy -Identity "OwaMailboxPolicy-Default"
 
-        if ($owaPolicy.AdditionalStorageProvidersAvailable -eq $false) {
+        # Get all OWA mailbox policies and check them
+        $owaPolicies = Get-OwaMailboxPolicy
+        $policiesWithStorageProviders = @()
+
+        foreach ($policy in $owaPolicies) {
+            if ($policy.AdditionalStorageProvidersAvailable -eq $true) {
+                $policiesWithStorageProviders += $policy.Name
+            }
+        }
+
+        if ($policiesWithStorageProviders.Count -eq 0) {
             Add-Result -ControlNumber "6.5.3" -ControlTitle "Ensure additional storage providers are restricted in Outlook on the web" `
-                       -ProfileLevel "L2" -Result "Pass" -Details "Third-party storage providers are disabled in OWA"
+                       -ProfileLevel "L2" -Result "Pass" -Details "Third-party storage providers are disabled in all OWA policies"
         }
         else {
             Add-Result -ControlNumber "6.5.3" -ControlTitle "Ensure additional storage providers are restricted in Outlook on the web" `
-                       -ProfileLevel "L2" -Result "Fail" -Details "Third-party storage providers are enabled" `
-                       -Remediation "Set-OwaMailboxPolicy -AdditionalStorageProvidersAvailable `$false"
+                       -ProfileLevel "L2" -Result "Fail" -Details "Third-party storage providers enabled in policies: $($policiesWithStorageProviders -join ', ')" `
+                       -Remediation "Set-OwaMailboxPolicy -Identity <PolicyName> -AdditionalStorageProvidersAvailable `$false for each policy"
         }
     }
     catch {
@@ -2118,7 +2252,10 @@ function Test-SharePointOnline {
         Write-Log "Checking 7.2.4 - OneDrive sharing restricted" -Level Info
         $spoTenant = Get-SPOTenant
 
+        # L2: Accept ExistingExternalUserSharingOnly, ExternalUserSharingOnly (New and existing guests), or Disabled
+        # OneDrive sharing should be restrictive but can allow collaboration with external users
         if ($spoTenant.OneDriveSharingCapability -eq "ExistingExternalUserSharingOnly" -or
+            $spoTenant.OneDriveSharingCapability -eq "ExternalUserSharingOnly" -or
             $spoTenant.OneDriveSharingCapability -eq "Disabled") {
             Add-Result -ControlNumber "7.2.4" -ControlTitle "Ensure OneDrive content sharing is restricted" `
                        -ProfileLevel "L2" -Result "Pass" -Details "OneDrive sharing: $($spoTenant.OneDriveSharingCapability)"
@@ -2126,7 +2263,7 @@ function Test-SharePointOnline {
         else {
             Add-Result -ControlNumber "7.2.4" -ControlTitle "Ensure OneDrive content sharing is restricted" `
                        -ProfileLevel "L2" -Result "Fail" -Details "OneDrive sharing too permissive: $($spoTenant.OneDriveSharingCapability)" `
-                       -Remediation "Set-SPOTenant -OneDriveSharingCapability ExistingExternalUserSharingOnly"
+                       -Remediation "Set-SPOTenant -OneDriveSharingCapability ExternalUserSharingOnly or more restrictive"
         }
     }
     catch {
@@ -2341,17 +2478,35 @@ function Test-SharePointOnline {
     # 7.3.4 - Ensure custom script execution is restricted on site collections
     try {
         Write-Log "Checking 7.3.4 - Custom script restricted on sites" -Level Info
-        $sites = Get-SPOSite -Limit All | Where-Object { $_.Template -notlike "*SPSMSITEHOST*" }
-        $sitesWithCustomScript = $sites | Where-Object { $_.DenyAddAndCustomizePages -eq "Disabled" }
+
+        # Get all sites excluding:
+        # - Personal sites (OneDrive - covered by 7.3.3)
+        # - Redirect sites (REDIRECTSITE)
+        # - App catalog sites (APPCATALOG)
+        # - Content Type Hub (POINTPUBLISHINGHUB)
+        # - Search center (SRCHCEN, SRCHCENTERLITE)
+        $sites = Get-SPOSite -Limit All | Where-Object {
+            $_.Template -notlike "*SPSMSITEHOST*" -and
+            $_.Template -notlike "*REDIRECTSITE*" -and
+            $_.Template -notlike "*APPCATALOG*" -and
+            $_.Template -notlike "*POINTPUBLISHINGHUB*" -and
+            $_.Template -notlike "*SRCHCEN*" -and
+            $_.Url -notlike "*/personal/*"
+        }
+
+        $sitesWithCustomScript = $sites | Where-Object {
+            $_.DenyAddAndCustomizePages -eq "Disabled" -or $_.DenyAddAndCustomizePages -eq 0
+        }
 
         if ($sitesWithCustomScript.Count -eq 0) {
             Add-Result -ControlNumber "7.3.4" -ControlTitle "Ensure custom script execution is restricted on site collections" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted on all sites"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted on all $($sites.Count) applicable site collections"
         }
         else {
+            $siteList = ($sitesWithCustomScript | Select-Object -First 5 -ExpandProperty Url) -join ', '
             Add-Result -ControlNumber "7.3.4" -ControlTitle "Ensure custom script execution is restricted on site collections" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "$($sitesWithCustomScript.Count) sites allow custom scripts" `
-                       -Remediation "Disable custom scripts on site collections"
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($sitesWithCustomScript.Count) sites allow custom scripts. Examples: $siteList" `
+                       -Remediation "Run: Get-SPOSite -Limit All | Where-Object {-not (`$_.Url -like '*/personal/*')} | Set-SPOSite -DenyAddAndCustomizePages Enabled"
         }
     }
     catch {
@@ -2422,16 +2577,44 @@ function Test-MicrosoftTeams {
         $externalAccessPolicy = Get-CsExternalAccessPolicy -Identity Global
         $tenantFedConfig = Get-CsTenantFederationConfiguration
 
-        if ($externalAccessPolicy.EnableFederationAccess -eq $false -or
-            ($tenantFedConfig.AllowedDomains.AllowedDomain.Count -gt 0 -and
-             $tenantFedConfig.AllowedDomains.Count -eq 0)) {
+        # Check if external access is disabled OR if using an allowlist approach
+        $isRestricted = $false
+        $details = ""
+
+        if ($externalAccessPolicy.EnableFederationAccess -eq $false) {
+            $isRestricted = $true
+            $details = "Federation access is disabled"
+        }
+        elseif ($tenantFedConfig.AllowFederatedUsers -eq $false) {
+            $isRestricted = $true
+            $details = "Federated users are blocked"
+        }
+        elseif ($tenantFedConfig.AllowedDomains -and
+                $tenantFedConfig.AllowedDomains.AllowedDomain -and
+                $tenantFedConfig.AllowedDomains.AllowedDomain.Count -gt 0) {
+            # Allowlist is configured (restrictive mode)
+            $isRestricted = $true
+            $details = "External access restricted to allowlist ($($tenantFedConfig.AllowedDomains.AllowedDomain.Count) domains)"
+        }
+        elseif ($tenantFedConfig.BlockedDomains -and
+                $tenantFedConfig.BlockedDomains.Count -eq 0 -and
+                $tenantFedConfig.AllowPublicUsers -eq $true) {
+            # Open federation - not restricted
+            $isRestricted = $false
+            $details = "External access is open to all domains (not restricted)"
+        }
+        else {
+            $details = "External access configuration unclear - verify manually"
+        }
+
+        if ($isRestricted) {
             Add-Result -ControlNumber "8.2.1" -ControlTitle "Ensure external domains are restricted in the Teams admin center" `
-                       -ProfileLevel "L2" -Result "Pass" -Details "External access restricted or limited to allowed domains"
+                       -ProfileLevel "L2" -Result "Pass" -Details $details
         }
         else {
             Add-Result -ControlNumber "8.2.1" -ControlTitle "Ensure external domains are restricted in the Teams admin center" `
-                       -ProfileLevel "L2" -Result "Fail" -Details "External access not restricted" `
-                       -Remediation "Restrict external access or configure allowed domains list"
+                       -ProfileLevel "L2" -Result "Fail" -Details $details `
+                       -Remediation "Restrict external access: either disable federation or configure allowed domains list"
         }
     }
     catch {
@@ -2502,18 +2685,31 @@ function Test-MicrosoftTeams {
     # 8.4.1 - Ensure app permission policies are configured
     try {
         Write-Log "Checking 8.4.1 - Teams app permission policies" -Level Info
-        $appSetupPolicies = Get-CsTeamsAppSetupPolicy
+        $appPermissionPolicies = Get-CsTeamsAppPermissionPolicy
 
-        # Check if global policy restricts third-party apps
-        $globalPolicy = $appSetupPolicies | Where-Object { $_.Identity -eq "Global" }
+        # Check global policy for third-party and custom app restrictions
+        $globalPolicy = $appPermissionPolicies | Where-Object { $_.Identity -eq "Global" }
 
-        if ($globalPolicy.AllowUserPinning -eq $false -or $appSetupPolicies.Count -gt 1) {
-            Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "App permission policies configured: $($appSetupPolicies.Count) policies found"
+        if ($globalPolicy) {
+            # Check if third-party and custom apps are restricted
+            $thirdPartyRestricted = ($globalPolicy.DefaultCatalogAppsType -eq "BlockedAppList" -or
+                                      $globalPolicy.DefaultCatalogAppsType -eq "AllowedAppList")
+            $customAppsRestricted = ($globalPolicy.GlobalCatalogAppsType -eq "BlockedAppList" -or
+                                     $globalPolicy.GlobalCatalogAppsType -eq "AllowedAppList")
+
+            if ($thirdPartyRestricted -or $customAppsRestricted) {
+                Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "App permissions restricted (Third-party: $($globalPolicy.DefaultCatalogAppsType), Custom: $($globalPolicy.GlobalCatalogAppsType))"
+            }
+            else {
+                Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "App permissions too permissive (Third-party: $($globalPolicy.DefaultCatalogAppsType), Custom: $($globalPolicy.GlobalCatalogAppsType))" `
+                           -Remediation "Configure app permission policies to restrict third-party and custom apps using allowlist or blocklist"
+            }
         }
         else {
             Add-Result -ControlNumber "8.4.1" -ControlTitle "Ensure app permission policies are configured" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Default app permissions may be too permissive" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "No global app permission policy found" `
                        -Remediation "Configure app permission policies to restrict third-party and custom apps"
         }
     }
