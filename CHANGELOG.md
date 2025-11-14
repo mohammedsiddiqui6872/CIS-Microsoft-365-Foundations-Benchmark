@@ -2,7 +2,19 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker.
 
-## [2.3.7] - Current Version
+## [2.3.8] - Current Version
+
+### Multiple Critical Fixes for False Positives
+
+**Fixed THREE False Positive Controls**:
+
+1. **Control 5.2.3.2 - Custom Banned Passwords**: Now correctly detects custom banned password lists using the proper directory settings API (`Get-MgBetaDirectorySetting` with template ID `5cf42378-d67d-4f36-ba46-e8b86229381d`). Previous implementation was checking incorrect property.
+
+2. **Control 5.2.4.1 - SSPR Enabled for All**: Changed to manual control. Microsoft does NOT provide Graph API to check SSPR scope (All vs Selected vs None). The `authorizationPolicy.allowedToUseSSPR` only applies to administrators, not regular users.
+
+3. **Control 7.2.3 - External Content Sharing**: Now correctly accepts "New and existing guests" (`ExternalUserSharingOnly`) as compliant per CIS Benchmark recommendations. This is the recommended secure configuration for external collaboration.
+
+## [2.3.7] - Previous Version
 
 ### Bug Fix - Microsoft Authenticator Number Matching Detection
 

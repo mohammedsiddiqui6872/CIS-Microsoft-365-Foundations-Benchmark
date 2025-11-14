@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.7'
+ModuleVersion = '2.3.8'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,13 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.8 - Multiple Critical Fixes for False Positives
+
+Fixed THREE false positive controls:
+- Control 5.2.3.2: Now correctly detects custom banned password lists using directory settings API
+- Control 5.2.4.1: Changed to manual (no API exists for SSPR "All" vs "Selected" scope)
+- Control 7.2.3: Now accepts "New and existing guests" (ExternalUserSharingOnly) as compliant per CIS Benchmark
+
 ## v2.3.7 - Bug Fix for Microsoft Authenticator Number Matching Detection
 
 Fixed Control 5.2.3.1: Corrected hashtable property access for Microsoft Authenticator MFA fatigue settings. Control was returning empty value for number matching despite being enabled. Changed from direct property access to hashtable key access for nested Graph API objects.

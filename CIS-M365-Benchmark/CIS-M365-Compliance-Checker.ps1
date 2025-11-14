@@ -1484,17 +1484,33 @@ function Test-EntraID {
     # 5.2.3.2 - Ensure custom banned passwords lists are used
     try {
         Write-Log "Checking 5.2.3.2 - Custom banned passwords" -Level Info
-        $org = Get-MgOrganization
 
-        # Check if custom banned password list is configured
-        # Note: This information is in the password policy settings
-        if ($org.PasswordPolicies -match "BannedPasswordList") {
-            Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Custom banned password list is configured"
+        # Check directory settings for Password Rule Settings template
+        $passwordSettings = Get-MgBetaDirectorySetting | Where-Object {
+            $_.TemplateId -eq "5cf42378-d67d-4f36-ba46-e8b86229381d"
+        }
+
+        if ($passwordSettings) {
+            # Extract the BannedPasswordList value
+            $bannedPasswords = $passwordSettings.Values | Where-Object {
+                $_.Name -eq "BannedPasswordList"
+            } | Select-Object -ExpandProperty Value
+
+            if ($bannedPasswords -and $bannedPasswords.Trim() -ne "") {
+                # Count entries (tab-delimited)
+                $passwordCount = ($bannedPasswords -split "`t" | Where-Object { $_ -ne "" }).Count
+                Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
+                           -ProfileLevel "L1" -Result "Pass" -Details "Custom banned password list configured with $passwordCount entries"
+            }
+            else {
+                Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "Password protection configured but no custom banned passwords defined" `
+                           -Remediation "Add custom banned passwords in Entra ID > Security > Authentication methods > Password protection"
+            }
         }
         else {
             Add-Result -ControlNumber "5.2.3.2" -ControlTitle "Ensure custom banned passwords lists are used" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No custom banned password list found" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Password protection settings not configured" `
                        -Remediation "Configure custom banned password list in Entra ID > Security > Authentication methods > Password protection"
         }
     }
@@ -1581,25 +1597,12 @@ function Test-EntraID {
     # Password Reset
 
     # 5.2.4.1 - Ensure 'Self service password reset enabled' is set to 'All'
-    try {
-        Write-Log "Checking 5.2.4.1 - SSPR enabled for all" -Level Info
-        $sspr = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/authorizationPolicy"
-
-        if ($sspr.allowedToUseSSPR -eq $true) {
-            Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "SSPR enabled for all users"
-        }
-        else {
-            Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "SSPR not enabled for all users" `
-                       -Remediation "Enable SSPR in Entra ID > Password reset > Properties"
-        }
-    }
-    catch {
-        Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check SSPR settings. Verify manually." `
-                   -Remediation "Check Entra ID > Password reset > Properties"
-    }
+    # NOTE: This is a MANUAL control - Microsoft does not provide a Graph API to check SSPR scope (All vs Selected)
+    # The authorizationPolicy.allowedToUseSSPR only applies to ADMINISTRATORS, not regular users
+    # Per Microsoft: "There is no method currently, be it via API or PowerShell, to change the SSPR settings for enabling SSPR for all users vs. selected users/groups"
+    Add-Result -ControlNumber "5.2.4.1" -ControlTitle "Ensure 'Self service password reset enabled' is set to 'All'" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Entra ID > Password reset > Properties > 'Self service password reset enabled' should be set to 'All'" `
+               -Remediation "Navigate to Entra ID > Password reset > Properties and verify 'Self service password reset enabled' is set to 'All' (not 'Selected' or 'None')"
 
     # Identity Governance (5.3.x)
 
@@ -2049,8 +2052,13 @@ function Test-SharePointOnline {
         Write-Log "Checking 7.2.3 - External sharing restricted" -Level Info
         $spoTenant = Get-SPOTenant
 
-        # Should be ExistingExternalUserSharingOnly or ExternalUserAndGuestSharing (most restrictive)
-        if ($spoTenant.SharingCapability -eq "ExistingExternalUserSharingOnly" -or
+        # Acceptable values per CIS Benchmark:
+        # - ExternalUserSharingOnly (New and existing guests) - Recommended for secure collaboration
+        # - ExistingExternalUserSharingOnly (Existing guests only) - More restrictive
+        # - Disabled (Only people in your organization) - Most restrictive
+        # NOT acceptable: ExternalUserAndGuestSharing (Anyone)
+        if ($spoTenant.SharingCapability -eq "ExternalUserSharingOnly" -or
+            $spoTenant.SharingCapability -eq "ExistingExternalUserSharingOnly" -or
             $spoTenant.SharingCapability -eq "Disabled") {
             Add-Result -ControlNumber "7.2.3" -ControlTitle "Ensure external content sharing is restricted" `
                        -ProfileLevel "L1" -Result "Pass" -Details "External sharing: $($spoTenant.SharingCapability)"
@@ -2058,7 +2066,7 @@ function Test-SharePointOnline {
         else {
             Add-Result -ControlNumber "7.2.3" -ControlTitle "Ensure external content sharing is restricted" `
                        -ProfileLevel "L1" -Result "Fail" -Details "External sharing too permissive: $($spoTenant.SharingCapability)" `
-                       -Remediation "Set-SPOTenant -SharingCapability ExistingExternalUserSharingOnly"
+                       -Remediation "Set-SPOTenant -SharingCapability ExternalUserSharingOnly (New and existing guests)"
         }
     }
     catch {
