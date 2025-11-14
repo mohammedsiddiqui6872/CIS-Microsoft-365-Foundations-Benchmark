@@ -524,6 +524,14 @@ For issues, questions, or suggestions:
 - 🐛 [Open an Issue](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues)
 - 💬 [Start a Discussion](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/discussions)
 
+## ☕ Support This Project
+
+If you find this tool helpful and want to support continued development:
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
+
+Your support helps maintain and improve this project!
+
 ---
 
 **⭐ If you find this tool helpful, please consider giving it a star!**
