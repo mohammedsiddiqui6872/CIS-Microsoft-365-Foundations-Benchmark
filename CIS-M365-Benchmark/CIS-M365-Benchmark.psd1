@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.8'
+ModuleVersion = '2.3.9'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,16 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.9 - Critical False Positive Fixes (Batch 1 of 2)
+
+Fixed FOUR critical false positive controls:
+- Control 5.2.2.12: Device code flow - Now checks CA policy with authentication flows (was checking wrong property)
+- Control 7.3.3: Custom scripts on personal sites - Now samples actual OneDrive sites (was only checking tenant default)
+- Control 2.4.4: ZAP for Teams - Now uses Get-TeamsProtectionPolicy.ZapEnabled (was duplicate of 2.1.5)
+- Control 6.1.2: Mailbox audit actions - Now validates actual audit actions per mailbox (was only checking if enabled)
+
+More fixes coming in v2.4.0 (CA policies, Teams, SharePoint controls).
+
 ## v2.3.8 - Multiple Critical Fixes for False Positives
 
 Fixed THREE false positive controls:

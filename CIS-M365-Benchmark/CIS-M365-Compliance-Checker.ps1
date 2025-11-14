@@ -774,21 +774,22 @@ function Test-M365Defender {
     # 2.4.4 - Ensure Zero-hour auto purge for Microsoft Teams is on
     try {
         Write-Log "Checking 2.4.4 - Zero-hour auto purge for Teams" -Level Info
-        $atpPolicy = Get-AtpPolicyForO365
+        $teamsProtectionPolicy = Get-TeamsProtectionPolicy
 
-        if ($atpPolicy.EnableATPForSPOTeamsODB -eq $true) {
+        if ($teamsProtectionPolicy.ZapEnabled -eq $true) {
             Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "ZAP for Teams is enabled"
+                       -ProfileLevel "L1" -Result "Pass" -Details "ZAP for Teams messages is enabled"
         }
         else {
             Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "ZAP for Teams is not enabled" `
-                       -Remediation "Set-AtpPolicyForO365 -EnableATPForSPOTeamsODB `$true"
+                       -ProfileLevel "L1" -Result "Fail" -Details "ZAP for Teams messages is disabled" `
+                       -Remediation "Set-TeamsProtectionPolicy -ZapEnabled `$true"
         }
     }
     catch {
         Add-Result -ControlNumber "2.4.4" -ControlTitle "Ensure Zero-hour auto purge for Microsoft Teams is on" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_ - Requires Defender for Office 365 Plan 2" `
+                   -Remediation "Enable Defender for Office 365 Plan 2 and configure Teams protection policy"
     }
 }
 
@@ -1423,24 +1424,30 @@ function Test-EntraID {
     # 5.2.2.12 - Ensure the device code sign-in flow is blocked
     try {
         Write-Log "Checking 5.2.2.12 - Device code flow blocked" -Level Info
-        $authFlowsPolicy = Get-MgPolicyAuthorizationPolicy
 
-        if ($authFlowsPolicy.DefaultUserRolePermissions.AllowedToUseSSPR -eq $false) {
-            # Note: Device code flow blocking is configured differently in newer API versions
-            # Checking for restrictive authentication flows policy
+        # Device code flow is blocked via Conditional Access policy with authentication flows condition
+        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+
+        $deviceCodeBlockPolicy = $caPolicies | Where-Object {
+            $_.State -eq "enabled" -and
+            $_.Conditions.AuthenticationFlows.TransferMethods -contains "deviceCodeFlow" -and
+            $_.GrantControls.BuiltInControls -contains "block"
+        }
+
+        if ($deviceCodeBlockPolicy) {
             Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
-                       -ProfileLevel "L1" -Result "Manual" -Details "Verify device code flow is blocked in Entra ID > Security > Authentication methods" `
-                       -Remediation "Block device code authentication flow in tenant settings"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Device code flow is blocked by CA policy: $($deviceCodeBlockPolicy.DisplayName)"
         }
         else {
             Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
-                       -ProfileLevel "L1" -Result "Manual" -Details "Verify device code flow is blocked in Entra ID > Security > Authentication methods" `
-                       -Remediation "Block device code authentication flow in tenant settings"
+                       -ProfileLevel "L1" -Result "Fail" -Details "No active CA policy found blocking device code flow" `
+                       -Remediation "Create Conditional Access policy: Target 'All users' > Conditions > Authentication flows > Device code flow > Grant > Block access"
         }
     }
     catch {
         Add-Result -ControlNumber "5.2.2.12" -ControlTitle "Ensure the device code sign-in flow is blocked" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+                   -ProfileLevel "L1" -Result "Manual" -Details "Unable to check device code flow policy. Verify manually in Entra ID > Security > Conditional Access" `
+                   -Remediation "Create CA policy to block device code authentication flow"
     }
 
     # Authentication Methods (5.2.3.x)
@@ -1778,23 +1785,55 @@ function Test-ExchangeOnline {
         Write-Log "Checking 6.1.2 - Mailbox audit actions" -Level Info
         $orgConfig = Get-OrganizationConfig
 
-        $ownerActions = $orgConfig.AuditBypassEnabled
-        $requiredActions = @("Update", "Move", "MoveToDeletedItems", "SoftDelete", "HardDelete", "SendAs", "SendOnBehalf", "Create")
+        # Required audit actions per CIS Benchmark
+        $requiredOwnerActions = @("Create", "HardDelete", "MailboxLogin", "Move", "MoveToDeletedItems", "SoftDelete", "Update")
+        $requiredDelegateActions = @("Create", "HardDelete", "Move", "MoveToDeletedItems", "SendAs", "SendOnBehalf", "SoftDelete", "Update")
+        $requiredAdminActions = @("Copy", "Create", "HardDelete", "Move", "MoveToDeletedItems", "SendAs", "SendOnBehalf", "SoftDelete", "Update")
 
-        # Check if mailbox auditing is configured with appropriate actions
-        if ($orgConfig.AuditDisabled -eq $false) {
+        # Sample a few mailboxes to verify audit actions (limit for performance)
+        $mailboxes = Get-Mailbox -ResultSize 5 | Select-Object UserPrincipalName, AuditEnabled, AuditOwner, AuditDelegate, AuditAdmin
+
+        $compliantMailboxes = 0
+        $nonCompliantDetails = @()
+
+        foreach ($mbx in $mailboxes) {
+            if ($mbx.AuditEnabled -eq $true) {
+                $ownerMissing = $requiredOwnerActions | Where-Object { $mbx.AuditOwner -notcontains $_ }
+                $delegateMissing = $requiredDelegateActions | Where-Object { $mbx.AuditDelegate -notcontains $_ }
+                $adminMissing = $requiredAdminActions | Where-Object { $mbx.AuditAdmin -notcontains $_ }
+
+                if (-not $ownerMissing -and -not $delegateMissing -and -not $adminMissing) {
+                    $compliantMailboxes++
+                }
+                else {
+                    $nonCompliantDetails += "$($mbx.UserPrincipalName): Missing owner:$($ownerMissing.Count), delegate:$($delegateMissing.Count), admin:$($adminMissing.Count) actions"
+                }
+            }
+            else {
+                $nonCompliantDetails += "$($mbx.UserPrincipalName): Auditing disabled"
+            }
+        }
+
+        if ($orgConfig.AuditDisabled -eq $false -and $compliantMailboxes -eq $mailboxes.Count) {
             Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Mailbox auditing is enabled at organization level"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Mailbox auditing enabled org-wide with proper default actions (sampled $($mailboxes.Count) mailboxes)"
+        }
+        elseif ($orgConfig.AuditDisabled -eq $true) {
+            Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Mailbox auditing disabled at organization level" `
+                       -Remediation "Set-OrganizationConfig -AuditDisabled `$false"
         }
         else {
+            $detailsStr = $nonCompliantDetails[0..2] -join "; "
             Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
-                       -ProfileLevel "L1" -Result "Manual" -Details "Verify mailbox audit actions for owner, delegate, and admin" `
-                       -Remediation "Configure appropriate mailbox audit actions using Set-MailboxAuditBypassAssociation"
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($nonCompliantDetails.Count) mailboxes missing required audit actions. Examples: $detailsStr" `
+                       -Remediation "Ensure default mailbox auditing is enabled and not overridden. Check: Get-Mailbox -ResultSize Unlimited | Where-Object {`$_.AuditEnabled -eq `$false}"
         }
     }
     catch {
         Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_ - Verify auditing configuration manually" `
+                   -Remediation "Check mailbox audit settings in Purview compliance portal"
     }
 
     # 6.1.3 - Ensure 'AuditBypassEnabled' is not enabled on mailboxes
@@ -2266,20 +2305,37 @@ function Test-SharePointOnline {
         Write-Log "Checking 7.3.3 - Custom script on personal sites" -Level Info
         $spoTenant = Get-SPOTenant
 
-        # DenyAddAndCustomizePages controls custom script on personal sites (OneDrive)
-        if ($spoTenant.DenyAddAndCustomizePages -eq 1 -or $spoTenant.DenyAddAndCustomizePages -eq 2) {
+        # Check tenant default for new sites
+        $tenantDefault = $spoTenant.DenyAddAndCustomizePages
+
+        # Sample check of existing personal sites (OneDrive) - limit to prevent performance issues
+        Write-Log "Sampling OneDrive sites to verify custom script restriction..." -Level Info
+        $personalSites = Get-SPOSite -IncludePersonalSite $true -Limit 100 -Filter "Url -like '-my.sharepoint.com/personal/'"
+
+        $sitesAllowingScripts = $personalSites | Where-Object {
+            $_.DenyAddAndCustomizePages -eq "Disabled" -or $_.DenyAddAndCustomizePages -eq 0
+        }
+
+        if ($tenantDefault -in @(1, 2) -and $sitesAllowingScripts.Count -eq 0) {
             Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted on personal sites"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Custom scripts restricted: Tenant default set and sampled sites ($($personalSites.Count)) compliant"
+        }
+        elseif ($sitesAllowingScripts.Count -gt 0) {
+            $siteList = ($sitesAllowingScripts | Select-Object -First 5 -ExpandProperty Url) -join ', '
+            Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($sitesAllowingScripts.Count) OneDrive sites allow custom scripts. Examples: $siteList" `
+                       -Remediation "Run: Get-SPOSite -IncludePersonalSite `$true -Limit All | Set-SPOSite -DenyAddAndCustomizePages Enabled"
         }
         else {
             Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Custom scripts allowed on personal sites" `
-                       -Remediation "Set-SPOsite -Identity <OneDriveURL> -DenyAddAndCustomizePages 1"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Tenant default allows custom scripts (DenyAddAndCustomizePages: $tenantDefault)" `
+                       -Remediation "Set-SPOTenant -DenyAddAndCustomizePages 1; then apply to existing sites"
         }
     }
     catch {
         Add-Result -ControlNumber "7.3.3" -ControlTitle "Ensure custom script execution is restricted on personal sites" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_ - Verify manually in SharePoint Admin Center" `
+                   -Remediation "Check SharePoint Admin Center > Settings > Custom Script"
     }
 
     # 7.3.4 - Ensure custom script execution is restricted on site collections

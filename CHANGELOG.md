@@ -2,7 +2,21 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker.
 
-## [2.3.8] - Current Version
+## [2.3.9] - Current Version
+
+### Critical False Positive Fixes - Batch 1
+
+**Fixed FOUR Critical Controls**:
+
+1. **Control 5.2.2.12 - Device Code Flow Blocking**: Fixed completely wrong property check. Now properly checks for Conditional Access policy with `AuthenticationFlows.TransferMethods` containing "deviceCodeFlow" and grant control set to "block". Previous implementation incorrectly checked `AllowedToUseSSPR` which is for admin password reset, not device code flow.
+
+2. **Control 7.3.3 - Custom Script on Personal Sites**: Fixed tenant-only check. Now samples up to 100 actual OneDrive personal sites to verify `DenyAddAndCustomizePages` setting. Previous implementation only checked tenant default which doesn't affect existing sites.
+
+3. **Control 2.4.4 - ZAP for Teams**: Fixed duplicate/wrong check. Now uses `Get-TeamsProtectionPolicy` and checks `ZapEnabled` property for Teams messages. Previous implementation incorrectly used `Get-AtpPolicyForO365.EnableATPForSPOTeamsODB` which is for Safe Attachments, not ZAP.
+
+4. **Control 6.1.2 - Mailbox Audit Actions**: Fixed missing validation. Now actually validates audit actions (Owner, Delegate, Admin) match CIS requirements by sampling mailboxes. Previous implementation only checked if auditing was enabled org-wide without validating which actions were being audited.
+
+## [2.3.8] - Previous Version
 
 ### Multiple Critical Fixes for False Positives
 
