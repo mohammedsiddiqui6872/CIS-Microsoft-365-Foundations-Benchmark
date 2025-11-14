@@ -57,3 +57,11 @@ Test_*.ps1
 install-nuget.ps1
 test-publish.ps1
 publish-module.ps1
+
+# Development and cleanup scripts
+fix-commits.ps1
+Fix-Git-History.ps1
+Remove-ClaudeAttribution.ps1
+
+# Temporary commit message files
+commit-msg-*.txt
