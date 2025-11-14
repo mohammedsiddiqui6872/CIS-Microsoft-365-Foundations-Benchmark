@@ -1027,24 +1027,11 @@ function Test-EntraID {
     }
 
     # 5.1.2.4 - Ensure access to the Entra admin center is restricted
-    try {
-        Write-Log "Checking 5.1.2.4 - Entra admin center access" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
-
-        if ($authPolicy.DefaultUserRolePermissions.AllowedToReadOtherUsers -eq $false) {
-            Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Non-admin access to Entra admin center restricted"
-        }
-        else {
-            Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Non-admins can access Entra admin center" `
-                       -Remediation "Update-MgPolicyAuthorizationPolicy -DefaultUserRolePermissions @{AllowedToReadOtherUsers=`$false}"
-        }
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    # NOTE: This is a MANUAL control - Microsoft does not provide a Graph API to check this setting
+    # The "Restrict access to Microsoft Entra admin center" setting can only be verified through the portal
+    Add-Result -ControlNumber "5.1.2.4" -ControlTitle "Ensure access to the Entra admin center is restricted" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Check Entra Admin Center > Identity > Users > User settings > 'Restrict access to Microsoft Entra admin center' should be 'Yes'" `
+               -Remediation "Navigate to Entra Admin Center > Identity > Users > User settings > Set 'Restrict access to Microsoft Entra admin center' to 'Yes'"
 
     # 5.1.2.5 - Ensure the option to remain signed in is hidden
     Add-Result -ControlNumber "5.1.2.5" -ControlTitle "Ensure the option to remain signed in is hidden" `

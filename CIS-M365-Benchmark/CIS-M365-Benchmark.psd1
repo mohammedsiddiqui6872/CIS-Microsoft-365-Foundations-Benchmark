@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.3.5'
+ModuleVersion = '2.3.6'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,23 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.3.6 - Critical Fix for False Positive
+
+### Critical Fix - Control 5.1.2.4
+- **Fixed FALSE POSITIVE on Control 5.1.2.4**: Changed from automated to manual check
+  - Control 5.1.2.4 "Ensure access to the Entra admin center is restricted" was incorrectly reporting failures
+  - Microsoft does NOT provide a Graph API to check this setting programmatically
+  - The script was incorrectly checking `AllowedToReadOtherUsers` which is a DIFFERENT setting
+  - This control is now properly marked as **MANUAL** per CIS Benchmark specifications
+
+### What This Means
+- Users will no longer see false "Fail" results for control 5.1.2.4
+- The control now shows "Manual" status with instructions to verify in the portal
+- Check: Entra Admin Center > Identity > Users > User settings > "Restrict access to Microsoft Entra admin center"
+
+### Why This Change
+According to Microsoft documentation, the "Restrict access to Microsoft Entra administration portal" setting can ONLY be viewed/configured through the portal - no API exists to check this setting programmatically.
+
 ## v2.3.5 - Bug Fix Release
 
 ### Critical Fix
@@ -129,15 +146,6 @@ PrivateData = @{
   - ProfileLevel="L1" now shows ONLY L1 controls (previously showed L2 as well)
   - ProfileLevel="L2" now shows ONLY L2 controls
   - ProfileLevel="All" continues to show all controls (default)
-
-### Bug Details
-User reported that when running `Invoke-CISBenchmark -ProfileLevel "L1"`, the report was still including L2 controls. This has been fixed by adding proper filtering logic in the Add-Result function.
-
-### Repository Cleanup
-- Cleaned up temporary development files from repository
-- Updated .gitignore to prevent future temporary files
-- Simplified CHANGELOG to show only current version information
-- Added Buy Me a Coffee support badge
 
 ## v2.3.4 - Cleanup Release
 
