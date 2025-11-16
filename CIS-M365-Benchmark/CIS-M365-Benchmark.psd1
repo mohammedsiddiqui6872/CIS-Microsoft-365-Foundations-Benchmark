@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.4.5'
+ModuleVersion = '2.4.6'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,14 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.4.6 - Simplified Header UI
+
+Fixed header dropdown issues:
+- Removed non-functional dropdown menu from header
+- Removed expand arrow icon that was showing as weird symbols
+- Simplified tenant display to show only tenant domain name
+- Cleaner, more professional header appearance
+
 ## v2.4.5 - Compact Dropdown Menu & UI Refinements
 
 Enhanced header dropdown menu with compact, professional design:
