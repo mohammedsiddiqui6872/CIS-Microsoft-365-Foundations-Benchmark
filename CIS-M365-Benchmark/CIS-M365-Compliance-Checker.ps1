@@ -1723,18 +1723,36 @@ function Test-EntraID {
             }
         }
 
+        $locationContext = $null
+        if ($featureSettings) {
+            if ($featureSettings['displayLocationInformationRequiredState']) {
+                $locationContext = $featureSettings['displayLocationInformationRequiredState']['state']
+            }
+            elseif ($featureSettings.displayLocationInformationRequiredState) {
+                $locationContext = $featureSettings.displayLocationInformationRequiredState.state
+            }
+        }
+
         # Treat null as not enabled
         if (-not $numberMatching) { $numberMatching = "not configured" }
         if (-not $additionalContext) { $additionalContext = "not configured" }
+        if (-not $locationContext) { $locationContext = "not configured" }
 
-        if ($numberMatching -eq "enabled" -and $additionalContext -eq "enabled") {
+        # Microsoft has made number matching "default" (on by default) as of 2025
+        # Accept both "enabled" and "default" as compliant states
+        $numberMatchingCompliant = ($numberMatching -eq "enabled" -or $numberMatching -eq "default")
+        $additionalContextCompliant = ($additionalContext -eq "enabled" -or $additionalContext -eq "default")
+        $locationContextCompliant = ($locationContext -eq "enabled" -or $locationContext -eq "default")
+
+        # CIS 5.2.3.1 requires all three: number matching, app info, and location info
+        if ($numberMatchingCompliant -and $additionalContextCompliant -and $locationContextCompliant) {
             Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Number matching and app context enabled"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Number matching: $numberMatching, App context: $additionalContext, Location: $locationContext"
         }
         else {
             Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Number matching: $numberMatching, App context: $additionalContext" `
-                       -Remediation "Enable number matching and application context in Entra ID > Security > Authentication methods > Microsoft Authenticator"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Number matching: $numberMatching, App context: $additionalContext, Location: $locationContext" `
+                       -Remediation "Enable all three settings in Entra ID > Security > Authentication methods > Microsoft Authenticator: (1) Require number matching, (2) Show application name, (3) Show geographic location"
         }
     }
     catch {

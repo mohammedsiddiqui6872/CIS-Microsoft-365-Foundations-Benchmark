@@ -2,6 +2,25 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [2.4.3] - 2025-01-17
+
+### 🐛 Bug Fixes
+- **Fixed Control 5.2.3.1**: False positive eliminated for Microsoft Authenticator MFA fatigue protection
+  - Now accepts "default" state as compliant (Microsoft enabled number matching by default in 2025)
+  - Added missing third check: `displayLocationInformationRequiredState` (geographic location)
+  - CIS 5.2.3.1 requires THREE settings: (1) number matching, (2) app name display, (3) location display
+  - Before: Only accepted "enabled" state and checked 2 of 3 required settings
+  - After: Accepts both "enabled" and "default" states and checks all 3 required settings
+
+### Technical Details
+- Updated validation logic to accept `$state -eq "enabled" -or $state -eq "default"`
+- Added `displayLocationInformationRequiredState` check per CIS Benchmark v5.0.0 requirement
+- Enhanced details output to show all three setting states for better troubleshooting
+- Updated remediation guidance to include all three required configuration steps
+
+### Issue Reported
+User reported false positive where number matching showed "not configured" despite being enabled by Microsoft's default settings.
+
 ## [2.1.1] - 2025-01-13
 
 ### 🐛 Bug Fixes
