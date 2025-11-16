@@ -1,23 +1,7 @@
 #Requires -Version 5.1
 
-<#
-.SYNOPSIS
-    CIS Microsoft 365 Foundations Benchmark v5.0.0 Module
-
-.DESCRIPTION
-    PowerShell module for auditing Microsoft 365 environments against CIS Benchmark v5.0.0.
-    Provides cmdlets for running compliance checks and generating reports with zero false positives.
-
-.NOTES
-    Version: 2.4.2
-    Author: Mohammed Siddiqui
-    Copyright: (c) 2025 Mohammed Siddiqui. MIT License.
-#>
-
-# Store the path to the main script for execution
 $Script:ComplianceCheckerPath = Join-Path $PSScriptRoot "CIS-M365-Compliance-Checker.ps1"
 
-# Automatic prerequisite installation on module import
 $Script:PrerequisiteCheckRun = $false
 
 function Script:Install-PrerequisitesAutomatically {
@@ -46,7 +30,6 @@ function Script:Install-PrerequisitesAutomatically {
             $needsUpdate += $module
         }
         else {
-            # Don't auto-import Microsoft.Graph - let Connect-MgGraph handle it
             if ($moduleName -ne "Microsoft.Graph") {
                 $loaded = Get-Module -Name $moduleName
                 if (-not $loaded) {
@@ -56,7 +39,6 @@ function Script:Install-PrerequisitesAutomatically {
         }
     }
 
-    # Update outdated modules - CRITICAL for Microsoft.Graph
     if ($needsUpdate.Count -gt 0) {
         Write-Host ""
         Write-Host "================================================================" -ForegroundColor Yellow
@@ -69,7 +51,6 @@ function Script:Install-PrerequisitesAutomatically {
         foreach ($module in $needsUpdate) {
             Write-Host "  Updating $($module.Name)..." -NoNewline -ForegroundColor White
 
-            # Special handling for Microsoft.Graph - MUST uninstall old versions first
             if ($module.Name -eq "Microsoft.Graph") {
                 try {
                     Write-Host ""
@@ -93,7 +74,6 @@ function Script:Install-PrerequisitesAutomatically {
                 }
             }
             else {
-                # For other modules, use standard update
                 try {
                     Update-Module -Name $module.Name -Force -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
                     Write-Host " [OK]" -ForegroundColor Green
@@ -114,7 +94,6 @@ function Script:Install-PrerequisitesAutomatically {
         Write-Host ""
     }
 
-    # Install missing modules
     if ($missing.Count -gt 0) {
         Write-Host ""
         Write-Host "================================================================" -ForegroundColor Cyan
@@ -144,7 +123,6 @@ function Script:Install-PrerequisitesAutomatically {
         Write-Host ""
     }
 
-    # Import modules that aren't loaded
     if ($needsImport.Count -gt 0) {
         Write-Host "Loading prerequisite modules..." -ForegroundColor Cyan
 
@@ -160,8 +138,6 @@ function Script:Install-PrerequisitesAutomatically {
                 Write-Host " [OK]" -ForegroundColor Green
             }
             catch {
-                # Don't block module loading if a prerequisite fails to import
-                # It will be caught later when the user runs Invoke-CISBenchmark
                 Write-Host " [WARNING]" -ForegroundColor Yellow
             }
         }
@@ -169,7 +145,6 @@ function Script:Install-PrerequisitesAutomatically {
     }
 }
 
-# Function to fix Microsoft.Graph version issues
 function Script:Fix-MicrosoftGraphVersion {
     try {
         $graphModule = Get-Module -ListAvailable -Name Microsoft.Graph | Sort-Object Version -Descending | Select-Object -First 1
@@ -186,7 +161,6 @@ function Script:Fix-MicrosoftGraphVersion {
             Write-Host "Updating Microsoft.Graph module..." -ForegroundColor Yellow
 
             try {
-                # Uninstall old versions first
                 Get-InstalledModule -Name Microsoft.Graph -AllVersions -ErrorAction SilentlyContinue |
                     Where-Object { $_.Version -lt [Version]"2.0.0" } |
                     ForEach-Object {
@@ -195,7 +169,6 @@ function Script:Fix-MicrosoftGraphVersion {
                         Write-Host " [OK]" -ForegroundColor Green
                     }
 
-                # Install latest version
                 Write-Host "  Installing latest Microsoft.Graph..." -NoNewline -ForegroundColor White
                 Install-Module -Name Microsoft.Graph -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop -WarningAction SilentlyContinue
                 Write-Host " [OK]" -ForegroundColor Green
@@ -220,51 +193,15 @@ function Script:Fix-MicrosoftGraphVersion {
         }
     }
     catch {
-        # Silently continue if version check fails
     }
     return $false
 }
 
-# Automatically install missing prerequisites when module is first imported
 if (-not $Script:PrerequisiteCheckRun) {
     Script:Install-PrerequisitesAutomatically
     $Script:PrerequisiteCheckRun = $true
 }
 
-<#
-.SYNOPSIS
-    Connects to Microsoft 365 services for CIS Benchmark compliance checks.
-
-.DESCRIPTION
-    Authenticates to Microsoft Graph with the necessary permissions for running
-    CIS Microsoft 365 Foundations Benchmark compliance checks. Attempts browser-based
-    authentication first, then falls back to device code authentication if needed.
-
-.PARAMETER Scopes
-    Optional custom Microsoft Graph permission scopes. If not specified, uses
-    the default scopes required for CIS benchmark checks.
-
-.EXAMPLE
-    Connect-CISBenchmark
-
-    Authenticates to Microsoft 365. Opens a browser window or displays a device code for authentication.
-
-.EXAMPLE
-    Connect-CISBenchmark -Scopes "Organization.Read.All", "User.Read.All"
-
-    Connects with custom permission scopes.
-
-.OUTPUTS
-    PSCustomObject
-    Returns the Microsoft Graph context if successful.
-
-.NOTES
-    This function must be run before Invoke-CISBenchmark to establish authentication.
-    Uses interactive browser-based authentication compatible with the latest Microsoft.Graph SDK.
-
-.LINK
-    https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0
-#>
 function Connect-CISBenchmark {
     [CmdletBinding()]
     param(
@@ -280,14 +217,12 @@ function Connect-CISBenchmark {
             "Application.Read.All"
         ),
 
-        # Use device code flow for authentication
         [switch]$UseDeviceCode
     )
 
     Write-Host "`nConnecting to Microsoft Graph" -ForegroundColor Yellow
 
     try {
-        # Ensure Microsoft.Graph.Authentication is loaded before calling Connect-MgGraph
         if (-not (Get-Module -Name Microsoft.Graph.Authentication)) {
             Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
         }
@@ -329,103 +264,6 @@ function Connect-CISBenchmark {
     }
 }
 
-<#
-.SYNOPSIS
-    Invokes CIS Microsoft 365 Foundations Benchmark compliance checks.
-
-.DESCRIPTION
-    Runs automated compliance checks against your Microsoft 365 tenant based on
-    CIS Microsoft 365 Foundations Benchmark v5.0.0. Generates HTML and CSV reports
-    showing pass/fail status for all 130 controls across 9 sections.
-
-.PARAMETER TenantDomain
-    Your Microsoft 365 tenant domain (e.g., contoso.onmicrosoft.com)
-
-.PARAMETER SharePointAdminUrl
-    Your SharePoint admin URL (e.g., https://contoso-admin.sharepoint.com)
-
-.PARAMETER OutputPath
-    Directory path where reports will be saved. Default: Current directory
-
-.PARAMETER ProfileLevel
-    CIS profile level to check: 'L1', 'L2', or 'All'. Default: 'All'
-    - L1: Level 1 controls (baseline security)
-    - L2: Level 2 controls (enhanced security)
-    - All: Both L1 and L2 controls
-
-.PARAMETER Format
-    Output format: 'Both', 'HTML', or 'CSV'. Default: 'Both'
-
-.PARAMETER Sections
-    Specific benchmark sections to check (e.g., @('1','2','3') or @('1.1','2.1'))
-    If not specified, all sections are checked.
-
-.EXAMPLE
-    Connect-CISBenchmark
-    Invoke-CISBenchmark
-
-    First authenticate, then run all compliance checks with auto-detected tenant information.
-
-.EXAMPLE
-    Connect-CISBenchmark
-    Invoke-CISBenchmark -ProfileLevel "L1"
-
-    Runs only Level 1 (baseline) compliance checks with auto-detected tenant information.
-
-.EXAMPLE
-    Connect-CISBenchmark
-    Invoke-CISBenchmark -TenantDomain "contoso.onmicrosoft.com" -SharePointAdminUrl "https://contoso-admin.sharepoint.com"
-
-    Runs all compliance checks with manually specified tenant information.
-
-.EXAMPLE
-    Invoke-CISBenchmark -Format "HTML" -OutputPath "C:\CIS-Reports"
-
-    Generates only HTML report and saves it to specified directory. Tenant info auto-detected.
-
-.EXAMPLE
-    Invoke-CISBenchmark -Sections @('1','2','5')
-
-    Runs only Section 1 (M365 Admin), Section 2 (Defender), and Section 5 (Entra ID) checks.
-
-.EXAMPLE
-    Invoke-CISBenchmark -Verbose
-
-    Runs all checks with verbose output showing detailed progress.
-
-.OUTPUTS
-    System.Management.Automation.PSCustomObject
-    Returns a summary object containing:
-    - TotalControls: Total number of controls checked
-    - Passed: Number of passing controls
-    - Failed: Number of failing controls
-    - Manual: Number of controls requiring manual review
-    - Errors: Number of controls with errors
-    - ComplianceRate: Percentage of automated controls that passed
-    - ReportPaths: Array of generated report file paths
-
-.NOTES
-    Required Modules:
-    - Microsoft.Graph
-    - ExchangeOnlineManagement
-    - Microsoft.Online.SharePoint.PowerShell
-    - MicrosoftTeams
-    - MSOnline (optional)
-
-    Required Permissions:
-    - Global Reader (recommended) or equivalent read permissions
-    - See PERMISSIONS.md for detailed permission requirements
-
-    Authentication:
-    - Run Connect-CISBenchmark first to authenticate
-    - Or the function will attempt auto-authentication if not already connected
-
-.LINK
-    https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0
-
-.LINK
-    https://www.cisecurity.org/benchmark/microsoft_365
-#>
 function Invoke-CISBenchmark {
     [CmdletBinding()]
     [OutputType([PSCustomObject])]
@@ -456,7 +294,6 @@ function Invoke-CISBenchmark {
     begin {
         Write-Verbose "Starting CIS Microsoft 365 Foundations Benchmark v5.0.0 Compliance Check"
 
-        # Auto-detect tenant domain and SharePoint URL if not provided
         if ([string]::IsNullOrEmpty($TenantDomain) -or [string]::IsNullOrEmpty($SharePointAdminUrl)) {
             Write-Host ""
             Write-Host "================================================================" -ForegroundColor Cyan
@@ -465,7 +302,6 @@ function Invoke-CISBenchmark {
             Write-Host ""
 
             try {
-                # Check for existing Microsoft Graph connection
                 Write-Host "Checking Microsoft Graph connection..." -ForegroundColor Gray
                 $graphContext = Get-MgContext -ErrorAction SilentlyContinue
 
@@ -502,12 +338,10 @@ function Invoke-CISBenchmark {
                     Write-Host "  Account: $($graphContext.Account)" -ForegroundColor Gray
                 }
 
-                # Get organization details
                 Write-Host "Retrieving tenant information..." -ForegroundColor Gray
                 $orgDetails = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
 
                 if ([string]::IsNullOrEmpty($TenantDomain)) {
-                    # Get the primary verified domain or onmicrosoft.com domain
                     $verifiedDomains = $orgDetails.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" }
                     if ($verifiedDomains) {
                         $TenantDomain = @($verifiedDomains)[0].Name
@@ -518,7 +352,6 @@ function Invoke-CISBenchmark {
                 }
 
                 if ([string]::IsNullOrEmpty($SharePointAdminUrl)) {
-                    # Construct SharePoint admin URL from tenant name
                     $tenantName = $TenantDomain.Split('.')[0]
                     $SharePointAdminUrl = "https://$tenantName-admin.sharepoint.com"
                     Write-Host "  Detected SharePoint Admin URL: $SharePointAdminUrl" -ForegroundColor Green
@@ -544,14 +377,12 @@ function Invoke-CISBenchmark {
         Write-Verbose "SharePoint URL: $SharePointAdminUrl"
         Write-Verbose "Profile Level: $ProfileLevel"
 
-        # Check and fix Microsoft.Graph version if needed
         $graphFixed = Script:Fix-MicrosoftGraphVersion
         if ($graphFixed) {
             Write-Host "Microsoft.Graph has been updated. Please restart PowerShell and run this command again." -ForegroundColor Yellow
             return
         }
 
-        # Ensure output directory exists
         if (-not (Test-Path -Path $OutputPath)) {
             Write-Verbose "Creating output directory: $OutputPath"
             New-Item -Path $OutputPath -ItemType Directory -Force | Out-Null
@@ -560,10 +391,8 @@ function Invoke-CISBenchmark {
 
     process {
         try {
-            # Clean SharePoint URL - remove trailing slash if present
             $cleanSharePointUrl = $SharePointAdminUrl.TrimEnd('/')
 
-            # Build parameters for the script
             $scriptParams = @{
                 TenantDomain = $TenantDomain
                 SharePointAdminUrl = $cleanSharePointUrl
@@ -573,12 +402,10 @@ function Invoke-CISBenchmark {
 
             Write-Verbose "Executing CIS compliance checker script..."
 
-            # Execute the compliance checker script
             & $Script:ComplianceCheckerPath @scriptParams
 
             Write-Verbose "Generating summary report..."
 
-            # Get the most recent report files
             $htmlReport = Get-ChildItem -Path $OutputPath -Filter "CIS-M365-Compliance-Report_*.html" -ErrorAction SilentlyContinue |
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
@@ -587,7 +414,6 @@ function Invoke-CISBenchmark {
                 Sort-Object LastWriteTime -Descending |
                 Select-Object -First 1
 
-            # Parse CSV to get summary statistics
             if ($csvReport) {
                 $reportData = Import-Csv -Path $csvReport.FullName
                 $passed = ($reportData | Where-Object { $_.Result -eq 'Pass' }).Count
@@ -602,7 +428,6 @@ function Invoke-CISBenchmark {
                     0
                 }
 
-                # Return summary object
                 $summary = [PSCustomObject]@{
                     TenantDomain = $TenantDomain
                     ProfileLevel = $ProfileLevel
@@ -635,43 +460,6 @@ function Invoke-CISBenchmark {
     }
 }
 
-<#
-.SYNOPSIS
-    Gets information about CIS benchmark controls.
-
-.DESCRIPTION
-    Retrieves details about specific CIS Microsoft 365 Foundations Benchmark controls,
-    including control number, title, profile level, and description.
-
-.PARAMETER ControlNumber
-    Specific control number(s) to retrieve (e.g., "1.1.1", "2.1.3")
-    If not specified, returns all controls.
-
-.PARAMETER Section
-    Return all controls in a specific section (e.g., "1", "2", "5")
-
-.PARAMETER ProfileLevel
-    Filter by profile level: 'L1', 'L2', or 'All'
-
-.EXAMPLE
-    Get-CISBenchmarkControl -ControlNumber "1.1.1"
-
-    Gets details for control 1.1.1
-
-.EXAMPLE
-    Get-CISBenchmarkControl -Section "5"
-
-    Gets all controls in Section 5 (Entra ID)
-
-.EXAMPLE
-    Get-CISBenchmarkControl -ProfileLevel "L1"
-
-    Gets all Level 1 controls
-
-.OUTPUTS
-    System.Management.Automation.PSCustomObject
-    Control information including number, title, section, profile level, and automation status
-#>
 function Get-CISBenchmarkControl {
     [CmdletBinding(DefaultParameterSetName='All')]
     [OutputType([PSCustomObject[]])]
@@ -688,15 +476,12 @@ function Get-CISBenchmarkControl {
         [string]$ProfileLevel = 'All'
     )
 
-    # Define control metadata (this would ideally be loaded from a data file)
     $controls = @(
         [PSCustomObject]@{ControlNumber="1.1.1"; Title="Ensure Administrative accounts are cloud-only"; Section="1"; ProfileLevel="L1"; Automated=$true}
         [PSCustomObject]@{ControlNumber="1.1.2"; Title="Ensure two emergency access accounts have been defined"; Section="1"; ProfileLevel="L1"; Automated=$false}
         [PSCustomObject]@{ControlNumber="1.1.3"; Title="Ensure that between two and four global admins are designated"; Section="1"; ProfileLevel="L1"; Automated=$true}
-        # ... (Additional controls would be defined here or loaded from JSON/XML)
     )
 
-    # Filter based on parameters
     $results = $controls
 
     if ($PSCmdlet.ParameterSetName -eq 'ByControl' -and $ControlNumber) {
@@ -714,23 +499,6 @@ function Get-CISBenchmarkControl {
     return $results
 }
 
-<#
-.SYNOPSIS
-    Tests if required PowerShell modules are installed.
-
-.DESCRIPTION
-    Checks if all required Microsoft 365 PowerShell modules are installed
-    and reports their versions and installation status.
-
-.EXAMPLE
-    Test-CISBenchmarkPrerequisites
-
-    Checks all required modules and displays their status.
-
-.OUTPUTS
-    System.Management.Automation.PSCustomObject
-    Module name, version, installation status, and required status
-#>
 function Test-CISBenchmarkPrerequisites {
     [CmdletBinding()]
     [OutputType([PSCustomObject[]])]
@@ -761,18 +529,6 @@ function Test-CISBenchmarkPrerequisites {
     return $results
 }
 
-<#
-.SYNOPSIS
-    Displays information about the CIS M365 Benchmark module.
-
-.DESCRIPTION
-    Shows module version, available commands, and useful links.
-
-.EXAMPLE
-    Get-CISBenchmarkInfo
-
-    Displays module information.
-#>
 function Get-CISBenchmarkInfo {
     [CmdletBinding()]
     param()
@@ -815,7 +571,6 @@ function Get-CISBenchmarkInfo {
     Write-Host ""
 }
 
-# Export module members
 Export-ModuleMember -Function @(
     'Connect-CISBenchmark',
     'Invoke-CISBenchmark',
