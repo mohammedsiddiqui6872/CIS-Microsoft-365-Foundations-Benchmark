@@ -69,3 +69,7 @@ commit-msg-*.txt
 
 # Internal review and analysis files (local only)
 FALSE_POSITIVE_REVIEW.md
+CHANGELOG.md
+Test-Report-Generator.ps1
+Test-Report-Generator-ThemeSwitcher.ps1
+Test-CIS-Compliance-Report.html

@@ -12,7 +12,7 @@ A comprehensive PowerShell module that audits your Microsoft 365 environment aga
 ## 🚀 Features
 
 - ✅ **130 Automated Compliance Checks** across all M365 services
-- 🎯 **Zero False Positives** - v2.4.0 eliminates false positives with comprehensive validation
+- 🎯 **Zero False Positives** - v2.4.8 eliminates false positives with comprehensive validation
 - 📊 **68% Fully Automated** - Most checks run automatically via Microsoft Graph API
 - 📈 **Zero-Parameter Authentication** - New `Connect-CISBenchmark` command for easy setup
 - 📄 **Dual Report Format** - Professional HTML and CSV reports with floating action buttons
@@ -407,7 +407,7 @@ The script generates two types of reports:
 ```
 ================================================================
   CIS Microsoft 365 Foundations Benchmark v5.0.0
-  Compliance Checker v2.4.3
+  Compliance Checker v2.4.8
 ================================================================
 
 [2025-01-14 15:30:08] [Info] Checking required PowerShell modules...
