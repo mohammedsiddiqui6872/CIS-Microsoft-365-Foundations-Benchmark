@@ -12,7 +12,7 @@
 RootModule = 'CIS-M365-Benchmark.psm1'
 
 # Version number of this module.
-ModuleVersion = '2.4.4'
+ModuleVersion = '2.4.5'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Desktop', 'Core')
@@ -122,6 +122,16 @@ PrivateData = @{
 
         # ReleaseNotes of this module
         ReleaseNotes = @'
+## v2.4.5 - Compact Dropdown Menu & UI Refinements
+
+Enhanced header dropdown menu with compact, professional design:
+- Redesigned dropdown to appear below tenant name (proper positioning)
+- Reduced height by 70% for compact, efficient design
+- Fixed dropdown appearing at page bottom issue
+- Optimized spacing and font sizes for better readability
+- Added absolute positioning with improved visual hierarchy
+- Enhanced shadow and border styling
+
 ## v2.4.2 - Comprehensive False Positive Fixes
 
 Fixed SIX controls based on comprehensive validation review:
