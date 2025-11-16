@@ -3570,7 +3570,7 @@ function Export-HtmlReport {
     <!-- Search Box -->
     <div class="search-container">
         <input type="text" id="searchBox" placeholder="Search by control number, title, level (L1/L2), or status (Pass/Fail/Manual)..." onkeyup="searchTable()">
-        <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <span class="search-icon">&#128269;</span>
         <span id="searchResults" class="search-results"></span>
     </div>
 
