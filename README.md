@@ -407,7 +407,7 @@ The script generates two types of reports:
 ```
 ================================================================
   CIS Microsoft 365 Foundations Benchmark v5.0.0
-  Compliance Checker v2.4.0
+  Compliance Checker v2.4.3
 ================================================================
 
 [2025-01-14 15:30:08] [Info] Checking required PowerShell modules...
