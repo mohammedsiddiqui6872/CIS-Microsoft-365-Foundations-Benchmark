@@ -1761,14 +1761,17 @@ function Test-EntraID {
             }
         }
 
-        # Treat null as not enabled
-        if (-not $numberMatching) { $numberMatching = "not configured" }
+        # Microsoft has made number matching "default" (on by default) as of 2025
+        # When the property is missing from the API response, it means it's using the default (enabled) setting
+        if (-not $numberMatching) {
+            # If numberMatchingRequiredState is missing, it means it's using Microsoft's default (enabled)
+            $numberMatching = "default (property absent - using Microsoft default)"
+        }
         if (-not $additionalContext) { $additionalContext = "not configured" }
         if (-not $locationContext) { $locationContext = "not configured" }
 
-        # Microsoft has made number matching "default" (on by default) as of 2025
-        # Accept both "enabled" and "default" as compliant states
-        $numberMatchingCompliant = ($numberMatching -eq "enabled" -or $numberMatching -eq "default")
+        # Accept "enabled", "default", or missing property (which means default) as compliant states
+        $numberMatchingCompliant = ($numberMatching -eq "enabled" -or $numberMatching -eq "default" -or $numberMatching -eq "default (property absent - using Microsoft default)")
         $additionalContextCompliant = ($additionalContext -eq "enabled" -or $additionalContext -eq "default")
         $locationContextCompliant = ($locationContext -eq "enabled" -or $locationContext -eq "default")
 
