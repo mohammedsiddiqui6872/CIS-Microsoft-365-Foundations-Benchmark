@@ -227,21 +227,102 @@ function Connect-CISBenchmark {
             Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
         }
 
+        # Check if already connected
+        $currentContext = Get-MgContext -ErrorAction SilentlyContinue
+        if ($currentContext -and $currentContext.TenantId) {
+            Write-Host "Already connected to Microsoft Graph" -ForegroundColor Green
+            Write-Host "  Tenant ID: $($currentContext.TenantId)" -ForegroundColor White
+            Write-Host "  Account: $($currentContext.Account)" -ForegroundColor White
+
+            # Check if we have the required scopes
+            $missingScopes = $Scopes | Where-Object { $_ -notin $currentContext.Scopes }
+            if ($missingScopes) {
+                Write-Host "`nMissing required scopes. Reconnecting..." -ForegroundColor Yellow
+            } else {
+                Write-Host "`nYou can now run: Invoke-CISBenchmark`n" -ForegroundColor Yellow
+                return $currentContext
+            }
+        }
+
         $params = @{
             Scopes        = $Scopes
             NoWelcome     = $true
             ContextScope  = 'Process'
         }
 
-        if ($UseDeviceCode) {
-            $params['UseDeviceCode'] = $true
-        }
-        elseif ($PSVersionTable.PSVersion.Major -ge 7) {
-            Write-Host "PowerShell 7+ detected - Using Device Code authentication for compatibility" -ForegroundColor Cyan
-            $params['UseDeviceCode'] = $true
-        }
+        # PowerShell 7 specific handling
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            Write-Host "PowerShell 7+ detected" -ForegroundColor Cyan
 
-        Connect-MgGraph @params
+            # PowerShell 7 has known issues with certain authentication methods
+            # We'll use a workaround by setting environment variables
+            Write-Host "Configuring authentication for PowerShell 7 compatibility..." -ForegroundColor Yellow
+
+            # Set environment variable to disable problematic authentication methods
+            $env:AZURE_IDENTITY_DISABLE_MULTITENANTAUTH = "true"
+
+            # Try different authentication methods in order
+            $authMethods = @(
+                @{
+                    Name = "Interactive Browser"
+                    Params = @{
+                        Scopes = $Scopes
+                        NoWelcome = $true
+                    }
+                },
+                @{
+                    Name = "Web Account Manager"
+                    Params = @{
+                        Scopes = $Scopes
+                        NoWelcome = $true
+                        ClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
+                    }
+                },
+                @{
+                    Name = "Minimal Parameters"
+                    Params = @{
+                        Scopes = $Scopes
+                    }
+                }
+            )
+
+            $connected = $false
+            foreach ($method in $authMethods) {
+                if ($connected) { break }
+
+                try {
+                    Write-Host "Trying $($method.Name) authentication..." -ForegroundColor Yellow
+                    $methodParams = $method.Params
+                    Connect-MgGraph @methodParams -ErrorAction Stop
+                    $connected = $true
+                }
+                catch {
+                    Write-Verbose "Failed with $($method.Name): $_"
+                    # Continue to next method
+                }
+            }
+
+            if (-not $connected) {
+                # If all methods fail, provide specific guidance
+                Write-Host "`n⚠ PowerShell 7 Authentication Issue Detected" -ForegroundColor Yellow
+                Write-Host "This is a known compatibility issue with Microsoft.Graph module in PowerShell 7." -ForegroundColor Yellow
+                Write-Host "`nWorkarounds:" -ForegroundColor Cyan
+                Write-Host "1. Use PowerShell 5.1 instead (recommended):" -ForegroundColor White
+                Write-Host "   powershell.exe -Command `"Import-Module CIS-M365-Benchmark; Connect-CISBenchmark`"" -ForegroundColor Gray
+                Write-Host "`n2. Or manually authenticate first:" -ForegroundColor White
+                Write-Host "   Connect-MgGraph -Scopes 'Directory.Read.All','Policy.Read.All','User.Read.All'" -ForegroundColor Gray
+                Write-Host "   Then run: Invoke-CISBenchmark" -ForegroundColor Gray
+
+                throw "Unable to authenticate with Microsoft Graph in PowerShell 7. See workarounds above."
+            }
+        }
+        else {
+            # PowerShell 5.1 - use standard authentication
+            if ($UseDeviceCode) {
+                $params['UseDeviceCode'] = $true
+            }
+            Connect-MgGraph @params
+        }
 
         $context = Get-MgContext
 

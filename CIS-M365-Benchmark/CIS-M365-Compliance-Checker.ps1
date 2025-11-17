@@ -3499,7 +3499,7 @@ function Export-HtmlReport {
                 <h1>CIS MICROSOFT 365 FOUNDATIONS BENCHMARK v5.0.0</h1>
             </div>
             <div class="header-right">
-                <div class="tenant-info" id="tenantInfo">
+                <div class="tenant-info" id="tenantInfo" onclick="toggleHeaderDetails()">
                     <span class="subtitle">$TenantDomain</span>
                     <span class="expand-icon" id="expandIcon">&#9660;</span>
                 </div>
@@ -3544,32 +3544,32 @@ function Export-HtmlReport {
             <div class="progress-fill" style="width: $passRate%">$passRate% Compliant</div>
         </div>
         <br/>
-        <div class="summary-box pass" data-filter="pass">
+        <div class="summary-box pass" data-filter="pass" onclick="filterResults(this)">
             <strong>Passed:</strong> $Script:PassedControls
         </div>
-        <div class="summary-box fail" data-filter="fail">
+        <div class="summary-box fail" data-filter="fail" onclick="filterResults(this)">
             <strong>Failed:</strong> $Script:FailedControls
         </div>
-        <div class="summary-box manual" data-filter="manual">
+        <div class="summary-box manual" data-filter="manual" onclick="filterResults(this)">
             <strong>Manual:</strong> $Script:ManualControls
         </div>
-        <div class="summary-box error" data-filter="error">
+        <div class="summary-box error" data-filter="error" onclick="filterResults(this)">
             <strong>Errors:</strong> $Script:ErrorControls
         </div>
-        <div class="summary-box" data-filter="all">
+        <div class="summary-box" data-filter="all" onclick="filterResults(this)">
             <strong>Total Controls:</strong> $Script:TotalControls
         </div>
-        <div class="summary-box level-l1" data-filter="L1">
+        <div class="summary-box level-l1" data-filter="L1" onclick="filterResults(this)">
             <strong>L1 Checks:</strong> $Script:L1PassedControls / $Script:L1TotalControls ($l1PassRate%)
         </div>
-        <div class="summary-box level-l2" data-filter="L2">
+        <div class="summary-box level-l2" data-filter="L2" onclick="filterResults(this)">
             <strong>L2 Checks:</strong> $Script:L2PassedControls / $Script:L2TotalControls ($l2PassRate%)
         </div>
     </div>
 
     <!-- Search Box -->
     <div class="search-container">
-        <input type="text" id="searchBox" placeholder="Search by control number, title, level (L1/L2), or status (Pass/Fail/Manual)...">
+        <input type="text" id="searchBox" placeholder="Search by control number, title, level (L1/L2), or status (Pass/Fail/Manual)..." onkeyup="searchTable()">
         <span class="search-icon">&#128269;</span>
         <span id="searchResults" class="search-results"></span>
     </div>
@@ -3641,63 +3641,6 @@ function Export-HtmlReport {
     <script>
         let activeFilter = null;
 
-        // Function to initialize all event listeners
-        function initializeEventListeners() {
-            console.log('Initializing event listeners...');
-
-            // Attach click handler to tenant info
-            const tenantInfo = document.getElementById('tenantInfo');
-            if (tenantInfo) {
-                tenantInfo.addEventListener('click', toggleHeaderDetails);
-                console.log('Tenant info click handler attached');
-            } else {
-                console.warn('Tenant info element not found');
-            }
-
-            // Attach click handlers to all summary boxes
-            const summaryBoxes = document.querySelectorAll('.summary-box');
-            if (summaryBoxes.length > 0) {
-                summaryBoxes.forEach(box => {
-                    box.addEventListener('click', function() {
-                        filterResults(this);
-                    });
-                });
-                console.log('Summary box click handlers attached to', summaryBoxes.length, 'elements');
-            } else {
-                console.warn('No summary boxes found');
-            }
-
-            // Attach search functionality
-            const searchBox = document.getElementById('searchBox');
-            if (searchBox) {
-                searchBox.addEventListener('keyup', searchTable);
-                searchBox.addEventListener('input', searchTable); // Also listen for input event
-                console.log('Search box event handlers attached');
-            } else {
-                console.warn('Search box element not found');
-            }
-        }
-
-        // Initialize when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeEventListeners);
-        } else {
-            // DOM is already loaded, initialize immediately
-            initializeEventListeners();
-        }
-
-        // Fallback: Also try to initialize after a short delay
-        setTimeout(function() {
-            const tenantInfo = document.getElementById('tenantInfo');
-            const summaryBoxes = document.querySelectorAll('.summary-box');
-
-            // Only re-initialize if elements exist but don't have event listeners
-            if ((tenantInfo && !tenantInfo.onclick) || (summaryBoxes.length > 0 && !summaryBoxes[0].onclick)) {
-                console.log('Re-initializing event listeners (fallback)...');
-                initializeEventListeners();
-            }
-        }, 100);
-
         function toggleHeaderDetails() {
             const detailsBox = document.getElementById('headerDetailsBox');
             const icon = document.getElementById('expandIcon');
@@ -3708,18 +3651,10 @@ function Export-HtmlReport {
         }
 
         function filterResults(box) {
-            if (!box) {
-                console.error('filterResults called with null box');
-                return;
-            }
+            if (!box) return;
 
             const filterValue = box.getAttribute('data-filter');
-            if (!filterValue) {
-                console.error('No data-filter attribute found on box');
-                return;
-            }
-
-            console.log('Filtering by:', filterValue);
+            if (!filterValue) return;
 
             const allRows = document.querySelectorAll('tbody tr');
             const allBoxes = document.querySelectorAll('.summary-box');

@@ -2,6 +2,27 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [2.5.3] - 2025-11-17
+
+### 🐛 Bug Fixes
+- **Improved Click Functionality in HTML Reports**: Simplified event handling for better reliability
+  - Restored inline onclick handlers with global function scope
+  - Removed complex event listener attachment that was causing timing issues
+  - Ensures all interactive elements work consistently across browsers
+  - Fixed tenant info dropdown, score card filtering, and search functionality
+
+### ⚠️ Known Issues
+- **PowerShell 7 Authentication**: Microsoft.Graph module has compatibility issues with PowerShell 7
+  - Error: "Microsoft.Identity.Client.BaseAbstractApplicationBuilder" method not found
+  - This is a known issue with the Microsoft.Graph authentication library
+  - **Workaround**: Use PowerShell 5.1 which works perfectly
+  - Module now provides clear guidance when PowerShell 7 authentication fails
+
+### 📝 Documentation
+- Added PowerShell 7 compatibility notes and workarounds
+- Improved error messages for authentication issues
+- Clear instructions for using PowerShell 5.1 as the recommended runtime
+
 ## [2.5.2] - 2025-11-17
 
 ### 🐛 Bug Fixes
