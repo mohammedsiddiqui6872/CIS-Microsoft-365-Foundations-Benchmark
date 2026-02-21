@@ -2,6 +2,11 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.0.1] - 2026-02-21
+
+### Fix
+- **Suppressed red error output in terminal**: Added `-ErrorAction Stop` to 30 API cmdlets inside try/catch blocks so errors are handled silently by catch blocks instead of printing red text to the terminal (e.g., PIM checks on tenants without Entra ID P2)
+
 ## [3.0.0] - 2026-02-21
 
 ### Major Update: CIS Benchmark v6.0.0

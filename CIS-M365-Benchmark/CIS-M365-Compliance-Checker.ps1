@@ -7,7 +7,7 @@
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 3.0.0
+    Version: 3.0.1
     Author: Mohammed Siddiqui
     Date: 2026-02-21
 
@@ -230,14 +230,14 @@ function Test-M365AdminCenter {
     # 1.1.1 - Ensure Administrative accounts are cloud-only
     try {
         Write-Log "Checking 1.1.1 - Administrative accounts are cloud-only" -Level Info
-        $adminRoles = Get-MgDirectoryRole -All
+        $adminRoles = Get-MgDirectoryRole -All -ErrorAction Stop
         $adminUsers = @()
         foreach ($role in $adminRoles) {
-            $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id
+            $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -ErrorAction Stop
             foreach ($member in $members) {
                 if ($member.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user') {
                     $user = Get-MgUser -UserId $member.Id -Property Id,UserPrincipalName,OnPremisesSyncEnabled
-                    if ($user.OnPremisesSyncEnabled) {
+ -ErrorAction Stop                    if ($user.OnPremisesSyncEnabled) {
                         $adminUsers += $user.UserPrincipalName
                     }
                 }
@@ -267,8 +267,8 @@ function Test-M365AdminCenter {
     # 1.1.3 - Ensure that between two and four global admins are designated
     try {
         Write-Log "Checking 1.1.3 - Global admin count" -Level Info
-        $globalAdminRole = Get-MgDirectoryRole -Filter "DisplayName eq 'Global Administrator'"
-        $globalAdmins = Get-MgDirectoryRoleMember -DirectoryRoleId $globalAdminRole.Id
+        $globalAdminRole = Get-MgDirectoryRole -Filter "DisplayName eq 'Global Administrator'" -ErrorAction Stop
+        $globalAdmins = Get-MgDirectoryRoleMember -DirectoryRoleId $globalAdminRole.Id -ErrorAction Stop
         $globalAdminCount = $globalAdmins.Count
 
         if ($globalAdminCount -ge 2 -and $globalAdminCount -le 4) {
@@ -296,7 +296,7 @@ function Test-M365AdminCenter {
         Write-Log "Checking 1.2.1 - Public groups approval" -Level Info
         # Get all groups and filter by visibility property (Graph API filter doesn't support visibility)
         $allGroups = Get-MgGroup -All -Property DisplayName,Visibility,Id
-        $publicGroups = $allGroups | Where-Object { $_.Visibility -eq 'Public' }
+ -ErrorAction Stop        $publicGroups = $allGroups | Where-Object { $_.Visibility -eq 'Public' }
 
         if ($publicGroups.Count -eq 0) {
             Add-Result -ControlNumber "1.2.1" -ControlTitle "Ensure that only organizationally managed/approved public groups exist" `
@@ -317,11 +317,11 @@ function Test-M365AdminCenter {
     # 1.2.2 - Ensure sign-in to shared mailboxes is blocked
     try {
         Write-Log "Checking 1.2.2 - Shared mailbox sign-in blocked" -Level Info
-        $sharedMailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited
+        $sharedMailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited -ErrorAction Stop
         $enabledSharedMB = @()
 
         foreach ($mb in $sharedMailboxes) {
-            $user = Get-MgUser -UserId $mb.ExternalDirectoryObjectId -Property AccountEnabled -ErrorAction SilentlyContinue
+            $user = Get-MgUser -UserId $mb.ExternalDirectoryObjectId -Property AccountEnable -ErrorAction Stopd -ErrorAction SilentlyContinue
             if ($user.AccountEnabled) {
                 $enabledSharedMB += $mb.UserPrincipalName
             }
@@ -346,7 +346,7 @@ function Test-M365AdminCenter {
     try {
         Write-Log "Checking 1.3.1 - Password expiration policy" -Level Info
         # Check password policy via Graph API
-        $defaultDomain = Get-MgDomain | Where-Object { $_.IsDefault -eq $true } | Select-Object -First 1
+        $defaultDomain = Get-MgDomain -ErrorAction Stop | Where-Object { $_.IsDefault -eq $true } | Select-Object -First 1
 
         if ($defaultDomain.PasswordValidityPeriodInDays -eq 2147483647 -or $defaultDomain.PasswordValidityPeriodInDays -gt 365) {
             Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
@@ -1081,7 +1081,7 @@ function Test-EntraID {
     # 5.1.2.2 - Ensure third party integrated applications are not allowed
     try {
         Write-Log "Checking 5.1.2.2 - Third party app registration" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
 
         if ($authPolicy.DefaultUserRolePermissions.AllowedToCreateApps -eq $false) {
             Add-Result -ControlNumber "5.1.2.2" -ControlTitle "Ensure third party integrated applications are not allowed" `
@@ -1101,7 +1101,7 @@ function Test-EntraID {
     # 5.1.2.3 - Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'
     try {
         Write-Log "Checking 5.1.2.3 - Restrict tenant creation" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
 
         if ($authPolicy.DefaultUserRolePermissions.AllowedToCreateTenants -eq $false) {
             Add-Result -ControlNumber "5.1.2.3" -ControlTitle "Ensure 'Restrict non-admin users from creating tenants' is set to 'Yes'" `
@@ -1138,14 +1138,14 @@ function Test-EntraID {
     # 5.1.3.1 - Ensure a dynamic group for guest users is created
     try {
         Write-Log "Checking 5.1.3.1 - Dynamic group for guest users" -Level Info
-        $guestGroups = Get-MgGroup -Filter "groupTypes/any(c:c eq 'DynamicMembership')" -All
+        $guestGroups = Get-MgGroup -Filter "groupTypes/any(c:c eq 'DynamicMembership')" -All -ErrorAction Stop
         $guestDynamicGroup = $null
 
         foreach ($group in $guestGroups) {
             # Get the full group details including MembershipRule
             $groupDetails = Get-MgGroup -GroupId $group.Id
 
-            # Check for various formats of the membership rule
+ -ErrorAction Stop            # Check for various formats of the membership rule
             # Common formats: user.userType -eq "Guest", (user.userType -eq "Guest"), user.userType -eq 'Guest'
             if ($groupDetails.MembershipRule -and
                 ($groupDetails.MembershipRule -match "user\.userType\s*-eq\s*[`"']?Guest[`"']?" -or
@@ -1257,7 +1257,7 @@ function Test-EntraID {
     # 5.1.5.1 - Ensure user consent to apps accessing company data on their behalf is not allowed
     try {
         Write-Log "Checking 5.1.5.1 - User consent disabled" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
 
         # Get the permission grant policies assigned to default user role
         $consentPolicies = $authPolicy.DefaultUserRolePermissions.PermissionGrantPoliciesAssigned
@@ -1311,7 +1311,7 @@ function Test-EntraID {
     # 5.1.6.2 - Ensure that guest user access is restricted
     try {
         Write-Log "Checking 5.1.6.2 - Guest user access restricted" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
 
         # Guest user role should be restricted:
         # '10dae51f-b6af-4016-8d66-8c2a99b929b3' = Guest users have limited access to properties and memberships of directory objects
@@ -1334,7 +1334,7 @@ function Test-EntraID {
     # 5.1.6.3 - Ensure guest user invitations are limited to the Guest Inviter role
     try {
         Write-Log "Checking 5.1.6.3 - Guest inviter role restriction" -Level Info
-        $authPolicy = Get-MgPolicyAuthorizationPolicy
+        $authPolicy = Get-MgPolicyAuthorizationPolicy -ErrorAction Stop
 
         # Acceptable values (in order from most restrictive to least restrictive that still passes):
         # - adminsOnly: Only Global Admins can invite (most restrictive - compliant)
@@ -1870,7 +1870,7 @@ function Test-EntraID {
     # 5.2.3.1 - Ensure Microsoft Authenticator is configured to protect against MFA fatigue
     try {
         Write-Log "Checking 5.2.3.1 - Authenticator MFA fatigue protection" -Level Info
-        $authMethodPolicy = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "MicrosoftAuthenticator"
+        $authMethodPolicy = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "MicrosoftAuthenticator" -ErrorAction Stop
 
         $featureSettings = $authMethodPolicy.AdditionalProperties['featureSettings']
 
@@ -1995,7 +1995,7 @@ function Test-EntraID {
     # 5.2.3.4 - Ensure all member users are 'MFA capable'
     try {
         Write-Log "Checking 5.2.3.4 - All users MFA capable" -Level Info
-        $authMethods = Get-MgReportAuthenticationMethodUserRegistrationDetail -All
+        $authMethods = Get-MgReportAuthenticationMethodUserRegistrationDetail -All -ErrorAction Stop
         $nonMfaUsers = $authMethods | Where-Object { $_.IsMfaCapable -eq $false -and $_.UserType -eq "member" }
 
         if ($nonMfaUsers.Count -eq 0) {
@@ -2016,8 +2016,8 @@ function Test-EntraID {
     # 5.2.3.5 - Ensure weak authentication methods are disabled
     try {
         Write-Log "Checking 5.2.3.5 - Weak auth methods disabled" -Level Info
-        $smsConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Sms"
-        $voiceConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Voice"
+        $smsConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Sms" -ErrorAction Stop
+        $voiceConfig = Get-MgPolicyAuthenticationMethodPolicyAuthenticationMethodConfiguration -AuthenticationMethodConfigurationId "Voice" -ErrorAction Stop
 
         $weakMethods = @()
         if ($smsConfig.State -eq "enabled") { $weakMethods += "SMS" }
@@ -2042,7 +2042,7 @@ function Test-EntraID {
     # 5.2.3.6 - Ensure system-preferred multifactor authentication is enabled
     try {
         Write-Log "Checking 5.2.3.6 - System-preferred MFA" -Level Info
-        $authMethodsPolicy = Get-MgPolicyAuthenticationMethodPolicy
+        $authMethodsPolicy = Get-MgPolicyAuthenticationMethodPolicy -ErrorAction Stop
 
         # System credential preferences - use hashtable key access for Graph API beta properties
         $systemCredPrefs = $authMethodsPolicy.AdditionalProperties['systemCredentialPreferences']
@@ -2173,8 +2173,8 @@ function Test-EntraID {
     # 5.3.4 - Ensure approval is required for Global Administrator role activation
     try {
         Write-Log "Checking 5.3.4 - Global Admin approval requirement" -Level Info
-        $globalAdminRole = Get-MgDirectoryRole -All | Where-Object { $_.DisplayName -eq "Global Administrator" }
-        $pimPolicyGlobalAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($globalAdminRole.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)"
+        $globalAdminRole = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq "Global Administrator" }
+        $pimPolicyGlobalAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($globalAdminRole.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)" -ErrorAction Stop
         $globalAdminApprovalRule = $pimPolicyGlobalAdmin.Policy.Rules | Where-Object { $_.Id -eq "Approval_EndUser_Assignment" }
 
         if ($globalAdminApprovalRule.AdditionalProperties.setting.isApprovalRequired -eq $true) {
@@ -2196,8 +2196,8 @@ function Test-EntraID {
     # 5.3.5 - Ensure approval is required for Privileged Role Administrator activation
     try {
         Write-Log "Checking 5.3.5 - Privileged Role Admin approval requirement" -Level Info
-        $privilegedRoleAdmin = Get-MgDirectoryRole -All | Where-Object { $_.DisplayName -eq "Privileged Role Administrator" }
-        $pimPolicyPrivRoleAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($privilegedRoleAdmin.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)"
+        $privilegedRoleAdmin = Get-MgDirectoryRole -All -ErrorAction Stop | Where-Object { $_.DisplayName -eq "Privileged Role Administrator" }
+        $pimPolicyPrivRoleAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($privilegedRoleAdmin.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)" -ErrorAction Stop
         $privRoleAdminApprovalRule = $pimPolicyPrivRoleAdmin.Policy.Rules | Where-Object { $_.Id -eq "Approval_EndUser_Assignment" }
 
         if ($privRoleAdminApprovalRule.AdditionalProperties.setting.isApprovalRequired -eq $true) {
@@ -2842,7 +2842,7 @@ function Test-MicrosoftTeams {
     # 8.1.1 - Ensure external file sharing in Teams is enabled for only approved cloud storage services
     try {
         Write-Log "Checking 8.1.1 - Teams external file sharing" -Level Info
-        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global
+        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global -ErrorAction Stop
 
         $approvedOnly = $true
         if ($teamsClientConfig.AllowDropbox -eq $true -or
@@ -2871,7 +2871,7 @@ function Test-MicrosoftTeams {
     # 8.1.2 - Ensure users can't send emails to a channel email address
     try {
         Write-Log "Checking 8.1.2 - Channel email disabled" -Level Info
-        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global
+        $teamsClientConfig = Get-CsTeamsClientConfiguration -Identity Global -ErrorAction Stop
 
         if ($teamsClientConfig.AllowEmailIntoChannel -eq $false) {
             Add-Result -ControlNumber "8.1.2" -ControlTitle "Ensure users can't send emails to a channel email address" `
@@ -2891,7 +2891,7 @@ function Test-MicrosoftTeams {
     # 8.2.1 - Ensure external domains are restricted in the Teams admin center
     try {
         Write-Log "Checking 8.2.1 - External domains restricted" -Level Info
-        $externalAccessPolicy = Get-CsExternalAccessPolicy -Identity Global
+        $externalAccessPolicy = Get-CsExternalAccessPolicy -Identity Global -ErrorAction Stop
         if ($null -eq $cachedTenantFedConfig) { throw "Tenant federation configuration data unavailable" }
         $tenantFedConfig = $cachedTenantFedConfig
 
@@ -3006,7 +3006,7 @@ function Test-MicrosoftTeams {
     # 8.4.1 - Ensure app permission policies are configured
     try {
         Write-Log "Checking 8.4.1 - Teams app permission policies" -Level Info
-        $appPermissionPolicies = Get-CsTeamsAppPermissionPolicy
+        $appPermissionPolicies = Get-CsTeamsAppPermissionPolicy -ErrorAction Stop
 
         # Check global policy for third-party and custom app restrictions
         $globalPolicy = $appPermissionPolicies | Where-Object { $_.Identity -eq "Global" }
@@ -3232,7 +3232,7 @@ function Test-MicrosoftTeams {
     # 8.6.1 - Ensure users can report security concerns in Teams
     try {
         Write-Log "Checking 8.6.1 - Teams message reporting enabled" -Level Info
-        $teamsMessagingPolicy = Get-CsTeamsMessagingPolicy -Identity Global
+        $teamsMessagingPolicy = Get-CsTeamsMessagingPolicy -Identity Global -ErrorAction Stop
 
         if ($teamsMessagingPolicy.AllowSecurityEndUserReporting -eq $true) {
             Add-Result -ControlNumber "8.6.1" -ControlTitle "Ensure users can report security concerns in Teams" `
