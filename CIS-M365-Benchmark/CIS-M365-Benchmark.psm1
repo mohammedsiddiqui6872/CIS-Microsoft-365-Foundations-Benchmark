@@ -10,7 +10,6 @@ function Script:Install-PrerequisitesAutomatically {
         @{ Name = "ExchangeOnlineManagement"; MinVersion = $null }
         @{ Name = "Microsoft.Online.SharePoint.PowerShell"; MinVersion = $null }
         @{ Name = "MicrosoftTeams"; MinVersion = $null }
-        @{ Name = "MSOnline"; MinVersion = $null }
     )
 
     $missing = @()
@@ -130,7 +129,12 @@ function Script:Install-PrerequisitesAutomatically {
             try {
                 Write-Host "  Loading $moduleName..." -NoNewline -ForegroundColor Gray
                 if ($psVersion -ge 7) {
-                    Import-Module -Name $moduleName -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking -SkipEditionCheck -Force | Out-Null
+                    if ($moduleName -eq "Microsoft.Online.SharePoint.PowerShell") {
+                        Import-Module -Name $moduleName -UseWindowsPowerShell -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking -Force | Out-Null
+                    }
+                    else {
+                        Import-Module -Name $moduleName -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking -SkipEditionCheck -Force | Out-Null
+                    }
                 }
                 else {
                     Import-Module -Name $moduleName -ErrorAction Stop -WarningAction SilentlyContinue -DisableNameChecking -Force | Out-Null
@@ -594,7 +598,6 @@ function Test-CISBenchmarkPrerequisites {
         @{Name="ExchangeOnlineManagement"; Required=$true}
         @{Name="Microsoft.Online.SharePoint.PowerShell"; Required=$true}
         @{Name="MicrosoftTeams"; Required=$true}
-        @{Name="MSOnline"; Required=$false}
     )
 
     $results = @()

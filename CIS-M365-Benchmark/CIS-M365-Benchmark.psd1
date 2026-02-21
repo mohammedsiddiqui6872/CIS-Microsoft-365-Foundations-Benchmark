@@ -1,7 +1,7 @@
 @{
 
 RootModule = 'CIS-M365-Benchmark.psm1'
-ModuleVersion = '2.5.7'
+ModuleVersion = '2.6.0'
 CompatiblePSEditions = @('Desktop', 'Core')
 GUID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
 Author = 'Mohammed Siddiqui'

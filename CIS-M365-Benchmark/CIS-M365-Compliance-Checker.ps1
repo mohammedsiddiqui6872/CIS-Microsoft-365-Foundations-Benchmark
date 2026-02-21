@@ -3,20 +3,19 @@
     CIS Microsoft 365 Foundations Benchmark v5.0.0 Compliance Checker
 
 .DESCRIPTION
-    Comprehensive PowerShell script to audit Microsoft 365 environment against all 128 CIS benchmark controls.
+    Comprehensive PowerShell script to audit Microsoft 365 environment against all 130 CIS benchmark controls.
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 2.5.7
+    Version: 2.6.0
     Author: Mohammed Siddiqui
-    Date: 2025-12-09
+    Date: 2026-02-21
 
     Required PowerShell Modules:
     - Microsoft.Graph (Install-Module Microsoft.Graph -Scope CurrentUser)
     - ExchangeOnlineManagement (Install-Module ExchangeOnlineManagement -Scope CurrentUser)
     - Microsoft.Online.SharePoint.PowerShell (Install-Module Microsoft.Online.SharePoint.PowerShell -Scope CurrentUser)
     - MicrosoftTeams (Install-Module MicrosoftTeams -Scope CurrentUser)
-    - MSOnline (Install-Module MSOnline -Scope CurrentUser)
 
 .PARAMETER TenantDomain
     Your Microsoft 365 tenant domain (e.g., contoso.onmicrosoft.com)
@@ -57,7 +56,7 @@ $Script:PassedControls = 0
 $Script:FailedControls = 0
 $Script:ManualControls = 0
 $Script:ErrorControls = 0
-$Script:MsolConnected = $false
+
 $Script:RequestedProfileLevel = $ProfileLevel
 
 # Level-specific counters
@@ -194,6 +193,12 @@ function Connect-M365Services {
 
         # Connect to SharePoint Online
         Write-Log "Connecting to SharePoint Online..." -Level Info
+        # Ensure SPO module is loaded with Windows PowerShell compatibility on PS 7+
+        if ($PSVersionTable.PSVersion.Major -ge 7) {
+            if (-not (Get-Module -Name "Microsoft.Online.SharePoint.PowerShell")) {
+                Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -WarningAction SilentlyContinue -DisableNameChecking -Force
+            }
+        }
         Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
         Write-Log "Connected to SharePoint Online" -Level Success
 
@@ -202,19 +207,9 @@ function Connect-M365Services {
         Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
         Write-Log "Connected to Microsoft Teams" -Level Success
 
-        # Connect to MSOnline (for legacy checks) - Optional
-        # Note: MSOnline doesn't support modern auth token reuse well, so this may prompt separately
-        Write-Log "Connecting to MSOnline (legacy module - may prompt separately)..." -Level Info
-        try {
-            Connect-MsolService -ErrorAction Stop
-            Write-Log "Connected to MSOnline" -Level Success
-            $script:MsolConnected = $true
-        }
-        catch {
-            Write-Log "Warning: Could not connect to MSOnline. Per-user MFA check (5.1.2.1) will be skipped." -Level Warning
-            Write-Log "MSOnline module is deprecated. Consider using Microsoft Graph for all checks." -Level Warning
-            $script:MsolConnected = $false
-        }
+        # MSOnline module has been retired (March 2025)
+        # Per-user MFA check (5.1.2.1) now uses Microsoft Graph instead
+        Write-Log "MSOnline module is retired. All checks now use Microsoft Graph." -Level Info
 
         Write-Log "All service connections established successfully!" -Level Success
         return $true
@@ -411,6 +406,12 @@ function Test-M365AdminCenter {
 function Test-M365Defender {
     Write-Log "Checking Section 2: Microsoft 365 Defender..." -Level Info
 
+    # Pre-fetch shared data for this section
+    $cachedMalwareFilterPolicy = $null
+    $cachedHostedContentFilterPolicy = $null
+    try { $cachedMalwareFilterPolicy = Get-MalwareFilterPolicy } catch { Write-Log "Warning: Could not retrieve MalwareFilterPolicy. Related checks will report errors." -Level Warning }
+    try { $cachedHostedContentFilterPolicy = Get-HostedContentFilterPolicy } catch { Write-Log "Warning: Could not retrieve HostedContentFilterPolicy. Related checks will report errors." -Level Warning }
+
     # 2.1.1 - Ensure Safe Links for Office Applications is Enabled
     try {
         Write-Log "Checking 2.1.1 - Safe Links for Office Applications" -Level Info
@@ -442,7 +443,8 @@ function Test-M365Defender {
     # 2.1.2 - Ensure the Common Attachment Types Filter is enabled
     try {
         Write-Log "Checking 2.1.2 - Common Attachment Types Filter" -Level Info
-        $malwarePolicies = Get-MalwareFilterPolicy
+        if ($null -eq $cachedMalwareFilterPolicy) { throw "MalwareFilterPolicy data unavailable" }
+        $malwarePolicies = $cachedMalwareFilterPolicy
         $commonAttachmentsEnabled = $false
 
         foreach ($policy in $malwarePolicies) {
@@ -470,7 +472,8 @@ function Test-M365Defender {
     # 2.1.3 - Ensure notifications for internal users sending malware is Enabled
     try {
         Write-Log "Checking 2.1.3 - Malware notifications for internal users" -Level Info
-        $malwarePolicies = Get-MalwareFilterPolicy
+        if ($null -eq $cachedMalwareFilterPolicy) { throw "MalwareFilterPolicy data unavailable" }
+        $malwarePolicies = $cachedMalwareFilterPolicy
         $notificationsEnabled = $false
 
         foreach ($policy in $malwarePolicies) {
@@ -546,11 +549,11 @@ function Test-M365Defender {
     # 2.1.6 - Ensure Exchange Online Spam Policies are set to notify administrators
     try {
         Write-Log "Checking 2.1.6 - Spam policy notifications" -Level Info
-        $hostedContentPolicies = Get-HostedContentFilterPolicy
+        $hostedOutboundPolicies = Get-HostedOutboundSpamFilterPolicy
         $notificationsConfigured = $false
 
-        foreach ($policy in $hostedContentPolicies) {
-            if ($policy.NotifyAdmin -eq $true -or $policy.NotifyCustom -eq $true) {
+        foreach ($policy in $hostedOutboundPolicies) {
+            if ($policy.NotifyOutboundSpamRecipients -eq $true -or $policy.NotifyOutboundSpam -eq $true) {
                 $notificationsConfigured = $true
                 break
             }
@@ -688,7 +691,8 @@ function Test-M365Defender {
     # 2.1.11 - Ensure comprehensive attachment filtering is applied
     try {
         Write-Log "Checking 2.1.11 - Comprehensive attachment filtering" -Level Info
-        $malwarePolicies = Get-MalwareFilterPolicy
+        if ($null -eq $cachedMalwareFilterPolicy) { throw "MalwareFilterPolicy data unavailable" }
+        $malwarePolicies = $cachedMalwareFilterPolicy
 
         # Comprehensive list of dangerous file types
         $requiredBlockedTypes = @('ace','ani','app','docm','exe','jar','reg','scr','vbe','vbs','xlsm')
@@ -762,7 +766,8 @@ function Test-M365Defender {
     # 2.1.14 - Ensure inbound anti-spam policies do not contain allowed domains
     try {
         Write-Log "Checking 2.1.14 - Anti-spam allowed domains" -Level Info
-        $contentFilters = Get-HostedContentFilterPolicy
+        if ($null -eq $cachedHostedContentFilterPolicy) { throw "HostedContentFilterPolicy data unavailable" }
+        $contentFilters = $cachedHostedContentFilterPolicy
         $policiesWithAllowedItems = @()
         $totalAllowedDomains = 0
         $totalAllowedSenders = 0
@@ -1007,29 +1012,41 @@ function Test-Intune {
 function Test-EntraID {
     Write-Log "Checking Section 5: Microsoft Entra Admin Center..." -Level Info
 
+    # Pre-fetch shared data for this section
+    $cachedCAPolicies = $null
+    try { $cachedCAPolicies = Get-MgIdentityConditionalAccessPolicy -All } catch { Write-Log "Warning: Could not retrieve Conditional Access policies. Related checks will report errors." -Level Warning }
+
     # 5.1.2.1 - Ensure 'Per-user MFA' is disabled
     try {
         Write-Log "Checking 5.1.2.1 - Per-user MFA disabled" -Level Info
 
-        if (-not $script:MsolConnected) {
-            Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
-                       -ProfileLevel "L1" -Result "Manual" -Details "MSOnline connection not available. Manual verification required." `
-                       -Remediation "Connect to MSOnline or verify through Azure Portal: Azure AD > Users > Multi-Factor Authentication"
-        }
-        else {
-            $users = Get-MsolUser -All
-            $perUserMfaEnabled = $users | Where-Object { $_.StrongAuthenticationRequirements.State -eq "Enabled" -or
-                                                          $_.StrongAuthenticationRequirements.State -eq "Enforced" }
+        # Use Microsoft Graph to check per-user MFA state (replaces deprecated MSOnline module)
+        try {
+            $perUserUri = "https://graph.microsoft.com/beta/users?`$count=true&`$filter=perUserMfaState eq 'enforced' or perUserMfaState eq 'enabled'&`$select=id,displayName,userPrincipalName"
+            $perUserResponse = Invoke-MgGraphRequest -Uri $perUserUri -Method GET -Headers @{ "ConsistencyLevel" = "eventual" }
+            $perUserMfaUsers = @($perUserResponse.value)
 
-            if ($perUserMfaEnabled.Count -eq 0) {
+            while ($perUserResponse.'@odata.nextLink') {
+                $perUserResponse = Invoke-MgGraphRequest -Uri $perUserResponse.'@odata.nextLink' -Method GET -Headers @{ "ConsistencyLevel" = "eventual" }
+                $perUserMfaUsers += $perUserResponse.value
+            }
+
+            if ($perUserMfaUsers.Count -eq 0) {
                 Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
                            -ProfileLevel "L1" -Result "Pass" -Details "No per-user MFA enabled (use Conditional Access instead)"
             }
             else {
                 Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
-                           -ProfileLevel "L1" -Result "Fail" -Details "$($perUserMfaEnabled.Count) users have per-user MFA enabled" `
+                           -ProfileLevel "L1" -Result "Fail" -Details "$($perUserMfaUsers.Count) users have per-user MFA enabled" `
                            -Remediation "Disable per-user MFA and use Conditional Access policies instead"
             }
+        }
+        catch {
+            # Beta endpoint for perUserMfaState may not be available in all tenants
+            Add-Result -ControlNumber "5.1.2.1" -ControlTitle "Ensure 'Per-user MFA' is disabled" `
+                       -ProfileLevel "L1" -Result "Manual" `
+                       -Details "Per-user MFA state could not be checked via Graph API. Verify manually in Azure Portal." `
+                       -Remediation "Check Azure Portal: Entra ID > Users > Per-user MFA. Disable per-user MFA and use Conditional Access policies instead."
         }
     }
     catch {
@@ -1188,8 +1205,10 @@ function Test-EntraID {
         Write-Log "Checking 5.1.6.2 - Guest user access restricted" -Level Info
         $authPolicy = Get-MgPolicyAuthorizationPolicy
 
-        # Guest user role should be restricted (2af84b1e-32c8-42b7-82bc-daa82404023b = restricted guest)
-        if ($authPolicy.GuestUserRoleId -eq "2af84b1e-32c8-42b7-82bc-daa82404023b") {
+        # Guest user role should be restricted:
+        # '10dae51f-b6af-4016-8d66-8c2a99b929b3' = Guest users have limited access to properties and memberships of directory objects
+        # '2af84b1e-32c8-42b7-82bc-daa82404023b' = Guest user access is restricted to properties and memberships of their own directory objects (most restrictive)
+        if (($authPolicy.GuestUserRoleId -eq "10dae51f-b6af-4016-8d66-8c2a99b929b3") -or ($authPolicy.GuestUserRoleId -eq "2af84b1e-32c8-42b7-82bc-daa82404023b")) {
             Add-Result -ControlNumber "5.1.6.2" -ControlTitle "Ensure that guest user access is restricted" `
                        -ProfileLevel "L1" -Result "Pass" -Details "Guest user access is restricted"
         }
@@ -1250,7 +1269,8 @@ function Test-EntraID {
     # 5.2.2.1 - Ensure multifactor authentication is enabled for all users in administrative roles
     try {
         Write-Log "Checking 5.2.2.1 - MFA for admin roles" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $adminMfaPolicy = $null
 
         # Define critical administrative role GUIDs per CIS Benchmark
@@ -1357,7 +1377,8 @@ function Test-EntraID {
     # 5.2.2.2 - Ensure multifactor authentication is enabled for all users
     try {
         Write-Log "Checking 5.2.2.2 - MFA for all users" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $allUserMfaPolicy = $null
 
         foreach ($policy in $caPolicies) {
@@ -1422,7 +1443,8 @@ function Test-EntraID {
     # 5.2.2.3 - Enable Conditional Access policies to block legacy authentication
     try {
         Write-Log "Checking 5.2.2.3 - Block legacy authentication" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $legacyAuthBlockPolicy = $null
 
         # All legacy auth client app types that should be blocked
@@ -1466,7 +1488,8 @@ function Test-EntraID {
     # 5.2.2.4 - Ensure Sign-in frequency is enabled and browser sessions are not persistent for Administrative users
     try {
         Write-Log "Checking 5.2.2.4 - Admin sign-in frequency" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $compliantPolicy = $null
 
         foreach ($policy in $caPolicies) {
@@ -1526,7 +1549,8 @@ function Test-EntraID {
     # 5.2.2.6 - Enable Identity Protection user risk policies
     try {
         Write-Log "Checking 5.2.2.6 - User risk policy" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $userRiskPolicy = $false
 
         foreach ($policy in $caPolicies) {
@@ -1554,7 +1578,8 @@ function Test-EntraID {
     # 5.2.2.7 - Enable Identity Protection sign-in risk policies
     try {
         Write-Log "Checking 5.2.2.7 - Sign-in risk policy" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $signInRiskPolicy = $false
 
         foreach ($policy in $caPolicies) {
@@ -1587,7 +1612,8 @@ function Test-EntraID {
     # 5.2.2.9 - Ensure a managed device is required for authentication
     try {
         Write-Log "Checking 5.2.2.9 - Managed device required" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
         $managedDevicePolicy = $false
 
         foreach ($policy in $caPolicies) {
@@ -1617,7 +1643,8 @@ function Test-EntraID {
     # 5.2.2.10 - Ensure a managed device is required to register security information
     try {
         Write-Log "Checking 5.2.2.10 - Managed device for MFA registration" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
 
         # Find policy that targets MFA registration AND requires managed device
         $mfaRegistrationPolicy = $caPolicies | Where-Object {
@@ -1650,7 +1677,8 @@ function Test-EntraID {
     # 5.2.2.11 - Ensure sign-in frequency for Intune Enrollment is set to 'Every time'
     try {
         Write-Log "Checking 5.2.2.11 - Intune enrollment sign-in frequency" -Level Info
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
 
         # Find policy targeting Intune enrollment with 'every time' sign-in frequency
         $intuneEnrollmentPolicy = $caPolicies | Where-Object {
@@ -1704,7 +1732,8 @@ function Test-EntraID {
         Write-Log "Checking 5.2.2.12 - Device code flow blocked" -Level Info
 
         # Device code flow is blocked via Conditional Access policy with authentication flows condition
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
+        if ($null -eq $cachedCAPolicies) { throw "Conditional Access policy data unavailable" }
+        $caPolicies = $cachedCAPolicies
 
         $deviceCodeBlockPolicy = $caPolicies | Where-Object {
             $_.State -eq "enabled" -and
@@ -1858,7 +1887,7 @@ function Test-EntraID {
     # 5.2.3.4 - Ensure all member users are 'MFA capable'
     try {
         Write-Log "Checking 5.2.3.4 - All users MFA capable" -Level Info
-        $authMethods = Get-MgReportAuthenticationMethodUserRegistrationDetail
+        $authMethods = Get-MgReportAuthenticationMethodUserRegistrationDetail -All
         $nonMfaUsers = $authMethods | Where-Object { $_.IsMfaCapable -eq $false -and $_.UserType -eq "member" }
 
         if ($nonMfaUsers.Count -eq 0) {
@@ -2024,29 +2053,18 @@ function Test-EntraID {
     # 5.3.4 - Ensure approval is required for Global Administrator role activation
     try {
         Write-Log "Checking 5.3.4 - Global Admin approval requirement" -Level Info
-        $globalAdminRole = Get-MgDirectoryRole -Filter "displayName eq 'Global Administrator'"
-        $pimPolicies = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/roleManagementPolicies?`$filter=scopeId eq '/' and scopeType eq 'DirectoryRole'"
+        $globalAdminRole = Get-MgDirectoryRole -All | Where-Object { $_.DisplayName -eq "Global Administrator" }
+        $pimPolicyGlobalAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($globalAdminRole.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)"
+        $globalAdminApprovalRule = $pimPolicyGlobalAdmin.Policy.Rules | Where-Object { $_.Id -eq "Approval_EndUser_Assignment" }
 
-        $globalAdminPolicy = $pimPolicies.value | Where-Object {
-            $_.displayName -match "Global Administrator"
-        }
-
-        if ($globalAdminPolicy) {
-            $approvalRule = $globalAdminPolicy.rules | Where-Object { $_.id -eq "Approval_EndUser_Assignment" }
-            if ($approvalRule.setting.isApprovalRequired -eq $true) {
-                Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
-                           -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Global Administrator activation"
-            }
-            else {
-                Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
-                           -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Global Administrator activation" `
-                           -Remediation "Require approval for Global Administrator role activation in PIM"
-            }
+        if ($globalAdminApprovalRule.AdditionalProperties.setting.isApprovalRequired -eq $true) {
+            Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Global Administrator activation"
         }
         else {
             Add-Result -ControlNumber "5.3.4" -ControlTitle "Ensure approval is required for Global Administrator role activation" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No PIM policy found for Global Administrator" `
-                       -Remediation "Configure PIM for Global Administrator role with approval requirement"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Global Administrator activation" `
+                       -Remediation "Require approval for Global Administrator role activation in PIM"
         }
     }
     catch {
@@ -2058,28 +2076,18 @@ function Test-EntraID {
     # 5.3.5 - Ensure approval is required for Privileged Role Administrator activation
     try {
         Write-Log "Checking 5.3.5 - Privileged Role Admin approval requirement" -Level Info
-        $pimPolicies = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/policies/roleManagementPolicies?`$filter=scopeId eq '/' and scopeType eq 'DirectoryRole'"
+        $privilegedRoleAdmin = Get-MgDirectoryRole -All | Where-Object { $_.DisplayName -eq "Privileged Role Administrator" }
+        $pimPolicyPrivRoleAdmin = Get-MgPolicyRoleManagementPolicyAssignment -Filter "scopeId eq '/' and scopeType eq 'Directory' and RoleDefinitionId eq '$($privilegedRoleAdmin.RoleTemplateId)'" -ExpandProperty "policy(`$expand=rules)"
+        $privRoleAdminApprovalRule = $pimPolicyPrivRoleAdmin.Policy.Rules | Where-Object { $_.Id -eq "Approval_EndUser_Assignment" }
 
-        $privRoleAdminPolicy = $pimPolicies.value | Where-Object {
-            $_.displayName -match "Privileged Role Administrator"
-        }
-
-        if ($privRoleAdminPolicy) {
-            $approvalRule = $privRoleAdminPolicy.rules | Where-Object { $_.id -eq "Approval_EndUser_Assignment" }
-            if ($approvalRule.setting.isApprovalRequired -eq $true) {
-                Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
-                           -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Privileged Role Administrator activation"
-            }
-            else {
-                Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
-                           -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Privileged Role Administrator activation" `
-                           -Remediation "Require approval for Privileged Role Administrator activation in PIM"
-            }
+        if ($privRoleAdminApprovalRule.AdditionalProperties.setting.isApprovalRequired -eq $true) {
+            Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
+                       -ProfileLevel "L1" -Result "Pass" -Details "Approval required for Privileged Role Administrator activation"
         }
         else {
             Add-Result -ControlNumber "5.3.5" -ControlTitle "Ensure approval is required for Privileged Role Administrator activation" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "No PIM policy found for Privileged Role Administrator" `
-                       -Remediation "Configure PIM for Privileged Role Administrator role with approval requirement"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Approval not required for Privileged Role Administrator activation" `
+                       -Remediation "Require approval for Privileged Role Administrator activation in PIM"
         }
     }
     catch {
@@ -2096,10 +2104,15 @@ function Test-EntraID {
 function Test-ExchangeOnline {
     Write-Log "Checking Section 6: Exchange Admin Center..." -Level Info
 
+    # Pre-fetch shared data for this section
+    $cachedOrgConfig = $null
+    try { $cachedOrgConfig = Get-OrganizationConfig } catch { Write-Log "Warning: Could not retrieve OrganizationConfig. Related checks will report errors." -Level Warning }
+
     # 6.1.1 - Ensure 'AuditDisabled' organizationally is set to 'False'
     try {
         Write-Log "Checking 6.1.1 - Organization audit enabled" -Level Info
-        $orgConfig = Get-OrganizationConfig
+        if ($null -eq $cachedOrgConfig) { throw "OrganizationConfig data unavailable" }
+        $orgConfig = $cachedOrgConfig
 
         if ($orgConfig.AuditDisabled -eq $false) {
             Add-Result -ControlNumber "6.1.1" -ControlTitle "Ensure 'AuditDisabled' organizationally is set to 'False'" `
@@ -2119,7 +2132,8 @@ function Test-ExchangeOnline {
     # 6.1.2 - Ensure mailbox audit actions are configured
     try {
         Write-Log "Checking 6.1.2 - Mailbox audit actions" -Level Info
-        $orgConfig = Get-OrganizationConfig
+        if ($null -eq $cachedOrgConfig) { throw "OrganizationConfig data unavailable" }
+        $orgConfig = $cachedOrgConfig
 
         # Required audit actions per CIS Benchmark
         $requiredOwnerActions = @("Create", "HardDelete", "MailboxLogin", "Move", "MoveToDeletedItems", "SoftDelete", "Update")
@@ -2305,7 +2319,8 @@ function Test-ExchangeOnline {
     # 6.5.1 - Ensure modern authentication for Exchange Online is enabled
     try {
         Write-Log "Checking 6.5.1 - Modern authentication enabled" -Level Info
-        $orgConfig = Get-OrganizationConfig
+        if ($null -eq $cachedOrgConfig) { throw "OrganizationConfig data unavailable" }
+        $orgConfig = $cachedOrgConfig
 
         if ($orgConfig.OAuth2ClientProfileEnabled -eq $true) {
             Add-Result -ControlNumber "6.5.1" -ControlTitle "Ensure modern authentication for Exchange Online is enabled" `
@@ -2325,7 +2340,8 @@ function Test-ExchangeOnline {
     # 6.5.2 - Ensure MailTips are enabled for end users
     try {
         Write-Log "Checking 6.5.2 - MailTips enabled" -Level Info
-        $orgConfig = Get-OrganizationConfig
+        if ($null -eq $cachedOrgConfig) { throw "OrganizationConfig data unavailable" }
+        $orgConfig = $cachedOrgConfig
 
         if ($orgConfig.MailTipsAllTipsEnabled -eq $true) {
             Add-Result -ControlNumber "6.5.2" -ControlTitle "Ensure MailTips are enabled for end users" `
@@ -2399,10 +2415,15 @@ function Test-ExchangeOnline {
 function Test-SharePointOnline {
     Write-Log "Checking Section 7: SharePoint Admin Center..." -Level Info
 
+    # Pre-fetch shared data for this section
+    $cachedSPOTenant = $null
+    try { $cachedSPOTenant = Get-SPOTenant } catch { Write-Log "Warning: Could not retrieve SPO Tenant configuration. Related checks will report errors." -Level Warning }
+
     # 7.2.1 - Ensure modern authentication for SharePoint applications is required
     try {
         Write-Log "Checking 7.2.1 - SharePoint modern authentication" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.LegacyAuthProtocolsEnabled -eq $false) {
             Add-Result -ControlNumber "7.2.1" -ControlTitle "Ensure modern authentication for SharePoint applications is required" `
@@ -2422,7 +2443,8 @@ function Test-SharePointOnline {
     # 7.2.2 - Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled
     try {
         Write-Log "Checking 7.2.2 - SharePoint Azure AD B2B integration" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.EnableAzureADB2BIntegration -eq $true) {
             Add-Result -ControlNumber "7.2.2" -ControlTitle "Ensure SharePoint and OneDrive integration with Azure AD B2B is enabled" `
@@ -2442,7 +2464,8 @@ function Test-SharePointOnline {
     # 7.2.3 - Ensure external content sharing is restricted
     try {
         Write-Log "Checking 7.2.3 - External sharing restricted" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         # Normalize the sharing capability value (trim whitespace and handle string type)
         $sharingValue = $spoTenant.SharingCapability.ToString().Trim()
@@ -2473,7 +2496,8 @@ function Test-SharePointOnline {
     # 7.2.4 - Ensure OneDrive content sharing is restricted
     try {
         Write-Log "Checking 7.2.4 - OneDrive sharing restricted" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         # L2: Accept ExistingExternalUserSharingOnly, ExternalUserSharingOnly (New and existing guests), or Disabled
         # OneDrive sharing should be restrictive but can allow collaboration with external users
@@ -2497,7 +2521,8 @@ function Test-SharePointOnline {
     # 7.2.5 - Ensure that SharePoint guest users cannot share items they don't own
     try {
         Write-Log "Checking 7.2.5 - Guest re-sharing prevented" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.PreventExternalUsersFromResharing -eq $true) {
             Add-Result -ControlNumber "7.2.5" -ControlTitle "Ensure that SharePoint guest users cannot share items they don't own" `
@@ -2517,7 +2542,8 @@ function Test-SharePointOnline {
     # 7.2.6 - Ensure SharePoint external sharing is managed through domain whitelist/blacklists
     try {
         Write-Log "Checking 7.2.6 - SharePoint domain restrictions" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.SharingDomainRestrictionMode -ne "None") {
             Add-Result -ControlNumber "7.2.6" -ControlTitle "Ensure SharePoint external sharing is managed through domain whitelist/blacklists" `
@@ -2537,7 +2563,8 @@ function Test-SharePointOnline {
     # 7.2.7 - Ensure link sharing is restricted in SharePoint and OneDrive
     try {
         Write-Log "Checking 7.2.7 - Link sharing restricted" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         # DefaultSharingLinkType should be Direct (most restrictive)
         if ($spoTenant.DefaultSharingLinkType -eq "Direct") {
@@ -2563,7 +2590,8 @@ function Test-SharePointOnline {
     # 7.2.9 - Ensure guest access to a site or OneDrive will expire automatically
     try {
         Write-Log "Checking 7.2.9 - Guest link expiration" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.ExternalUserExpirationRequired -eq $true) {
             Add-Result -ControlNumber "7.2.9" -ControlTitle "Ensure guest access to a site or OneDrive will expire automatically" `
@@ -2583,7 +2611,8 @@ function Test-SharePointOnline {
     # 7.2.10 - Ensure reauthentication with verification code is restricted
     try {
         Write-Log "Checking 7.2.10 - Email verification required" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.EmailAttestationRequired -eq $true) {
             Add-Result -ControlNumber "7.2.10" -ControlTitle "Ensure reauthentication with verification code is restricted" `
@@ -2603,7 +2632,8 @@ function Test-SharePointOnline {
     # 7.2.11 - Ensure the SharePoint default sharing link permission is set
     try {
         Write-Log "Checking 7.2.11 - Default sharing link permission" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.DefaultLinkPermission -eq "View") {
             Add-Result -ControlNumber "7.2.11" -ControlTitle "Ensure the SharePoint default sharing link permission is set" `
@@ -2623,7 +2653,8 @@ function Test-SharePointOnline {
     # 7.3.1 - Ensure Office 365 SharePoint infected files are disallowed for download
     try {
         Write-Log "Checking 7.3.1 - Infected file download blocked" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.DisallowInfectedFileDownload -eq $true) {
             Add-Result -ControlNumber "7.3.1" -ControlTitle "Ensure Office 365 SharePoint infected files are disallowed for download" `
@@ -2643,7 +2674,8 @@ function Test-SharePointOnline {
     # 7.3.2 - Ensure OneDrive sync is restricted for unmanaged devices
     try {
         Write-Log "Checking 7.3.2 - OneDrive sync restriction" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         if ($spoTenant.IsUnmanagedSyncClientForTenantRestricted -eq $true) {
             Add-Result -ControlNumber "7.3.2" -ControlTitle "Ensure OneDrive sync is restricted for unmanaged devices" `
@@ -2663,7 +2695,8 @@ function Test-SharePointOnline {
     # 7.3.3 - Ensure custom script execution is restricted on personal sites
     try {
         Write-Log "Checking 7.3.3 - Custom script on personal sites" -Level Info
-        $spoTenant = Get-SPOTenant
+        if ($null -eq $cachedSPOTenant) { throw "SPO Tenant data unavailable" }
+        $spoTenant = $cachedSPOTenant
 
         # Check tenant default for new sites
         $tenantDefault = $spoTenant.DenyAddAndCustomizePages
@@ -2745,6 +2778,12 @@ function Test-SharePointOnline {
 function Test-MicrosoftTeams {
     Write-Log "Checking Section 8: Microsoft Teams Admin Center..." -Level Info
 
+    # Pre-fetch shared data for this section
+    $cachedTeamsMeetingPolicy = $null
+    $cachedTenantFedConfig = $null
+    try { $cachedTeamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global } catch { Write-Log "Warning: Could not retrieve Teams meeting policy. Related checks will report errors." -Level Warning }
+    try { $cachedTenantFedConfig = Get-CsTenantFederationConfiguration } catch { Write-Log "Warning: Could not retrieve tenant federation configuration. Related checks will report errors." -Level Warning }
+
     # 8.1.1 - Ensure external file sharing in Teams is enabled for only approved cloud storage services
     try {
         Write-Log "Checking 8.1.1 - Teams external file sharing" -Level Info
@@ -2798,7 +2837,8 @@ function Test-MicrosoftTeams {
     try {
         Write-Log "Checking 8.2.1 - External domains restricted" -Level Info
         $externalAccessPolicy = Get-CsExternalAccessPolicy -Identity Global
-        $tenantFedConfig = Get-CsTenantFederationConfiguration
+        if ($null -eq $cachedTenantFedConfig) { throw "Tenant federation configuration data unavailable" }
+        $tenantFedConfig = $cachedTenantFedConfig
 
         # Check if external access is disabled OR if using an allowlist approach
         $isRestricted = $false
@@ -2848,7 +2888,8 @@ function Test-MicrosoftTeams {
     # 8.2.2 - Ensure communication with unmanaged Teams users is disabled
     try {
         Write-Log "Checking 8.2.2 - Unmanaged Teams users blocked" -Level Info
-        $tenantFedConfig = Get-CsTenantFederationConfiguration
+        if ($null -eq $cachedTenantFedConfig) { throw "Tenant federation configuration data unavailable" }
+        $tenantFedConfig = $cachedTenantFedConfig
 
         if ($tenantFedConfig.AllowTeamsConsumer -eq $false) {
             Add-Result -ControlNumber "8.2.2" -ControlTitle "Ensure communication with unmanaged Teams users is disabled" `
@@ -2868,7 +2909,8 @@ function Test-MicrosoftTeams {
     # 8.2.3 - Ensure external Teams users cannot initiate conversations
     try {
         Write-Log "Checking 8.2.3 - External Teams cannot initiate contact" -Level Info
-        $tenantFedConfig = Get-CsTenantFederationConfiguration
+        if ($null -eq $cachedTenantFedConfig) { throw "Tenant federation configuration data unavailable" }
+        $tenantFedConfig = $cachedTenantFedConfig
 
         if ($tenantFedConfig.AllowTeamsConsumerInbound -eq $false) {
             Add-Result -ControlNumber "8.2.3" -ControlTitle "Ensure external Teams users cannot initiate conversations" `
@@ -2888,7 +2930,8 @@ function Test-MicrosoftTeams {
     # 8.2.4 - Ensure communication with Skype users is disabled
     try {
         Write-Log "Checking 8.2.4 - Skype communication disabled" -Level Info
-        $tenantFedConfig = Get-CsTenantFederationConfiguration
+        if ($null -eq $cachedTenantFedConfig) { throw "Tenant federation configuration data unavailable" }
+        $tenantFedConfig = $cachedTenantFedConfig
 
         if ($tenantFedConfig.AllowPublicUsers -eq $false) {
             Add-Result -ControlNumber "8.2.4" -ControlTitle "Ensure communication with Skype users is disabled" `
@@ -2944,7 +2987,8 @@ function Test-MicrosoftTeams {
     # 8.5.1 - Ensure anonymous users can't join a meeting
     try {
         Write-Log "Checking 8.5.1 - Anonymous meeting join blocked" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowAnonymousUsersToJoinMeeting -eq $false) {
             Add-Result -ControlNumber "8.5.1" -ControlTitle "Ensure anonymous users can't join a meeting" `
@@ -2964,7 +3008,8 @@ function Test-MicrosoftTeams {
     # 8.5.2 - Ensure anonymous users and dial-in callers can't start a meeting
     try {
         Write-Log "Checking 8.5.2 - Anonymous cannot start meetings" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowAnonymousUsersToStartMeeting -eq $false) {
             Add-Result -ControlNumber "8.5.2" -ControlTitle "Ensure anonymous users and dial-in callers can't start a meeting" `
@@ -2984,7 +3029,8 @@ function Test-MicrosoftTeams {
     # 8.5.3 - Ensure only people in my org can bypass the lobby
     try {
         Write-Log "Checking 8.5.3 - Lobby bypass restricted" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AutoAdmittedUsers -eq "EveryoneInCompanyExcludingGuests" -or
             $teamsMeetingPolicy.AutoAdmittedUsers -eq "InvitedUsers") {
@@ -3005,7 +3051,8 @@ function Test-MicrosoftTeams {
     # 8.5.4 - Ensure users dialing in can't bypass the lobby
     try {
         Write-Log "Checking 8.5.4 - Dial-in lobby bypass blocked" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowPSTNUsersToBypassLobby -eq $false) {
             Add-Result -ControlNumber "8.5.4" -ControlTitle "Ensure users dialing in can't bypass the lobby" `
@@ -3025,7 +3072,8 @@ function Test-MicrosoftTeams {
     # 8.5.5 - Ensure meeting chat does not allow anonymous users
     try {
         Write-Log "Checking 8.5.5 - Anonymous chat restricted" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.MeetingChatEnabledType -eq "EnabledExceptAnonymous") {
             Add-Result -ControlNumber "8.5.5" -ControlTitle "Ensure meeting chat does not allow anonymous users" `
@@ -3045,7 +3093,8 @@ function Test-MicrosoftTeams {
     # 8.5.6 - Ensure only organizers and co-organizers can present
     try {
         Write-Log "Checking 8.5.6 - Presenter role restricted" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.DesignatedPresenterRoleMode -eq "OrganizerOnlyUserOverride") {
             Add-Result -ControlNumber "8.5.6" -ControlTitle "Ensure only organizers and co-organizers can present" `
@@ -3065,7 +3114,8 @@ function Test-MicrosoftTeams {
     # 8.5.7 - Ensure external participants can't give or request control
     try {
         Write-Log "Checking 8.5.7 - External control restricted" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowExternalParticipantGiveRequestControl -eq $false) {
             Add-Result -ControlNumber "8.5.7" -ControlTitle "Ensure external participants can't give or request control" `
@@ -3085,7 +3135,8 @@ function Test-MicrosoftTeams {
     # 8.5.8 - Ensure external meeting chat is off
     try {
         Write-Log "Checking 8.5.8 - External meeting chat disabled" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowExternalNonTrustedMeetingChat -eq $false) {
             Add-Result -ControlNumber "8.5.8" -ControlTitle "Ensure external meeting chat is off" `
@@ -3105,7 +3156,8 @@ function Test-MicrosoftTeams {
     # 8.5.9 - Ensure meeting recording is off by default
     try {
         Write-Log "Checking 8.5.9 - Meeting recording default setting" -Level Info
-        $teamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global
+        if ($null -eq $cachedTeamsMeetingPolicy) { throw "Teams meeting policy data unavailable" }
+        $teamsMeetingPolicy = $cachedTeamsMeetingPolicy
 
         if ($teamsMeetingPolicy.AllowCloudRecording -eq $false) {
             Add-Result -ControlNumber "8.5.9" -ControlTitle "Ensure meeting recording is off by default" `
@@ -3795,8 +3847,7 @@ function Start-ComplianceCheck {
         "Microsoft.Graph",
         "ExchangeOnlineManagement",
         "Microsoft.Online.SharePoint.PowerShell",
-        "MicrosoftTeams",
-        "MSOnline"
+        "MicrosoftTeams"
     )
 
     $missingModules = @()

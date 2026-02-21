@@ -2,6 +2,43 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [2.6.0] - 2026-02-21
+
+### Performance
+- **Cached redundant API calls**: Reduced 45 API calls to 7 across all section functions (80% reduction)
+  - `Get-MgIdentityConditionalAccessPolicy` cached in `Test-EntraID` (was called 10 times)
+  - `Get-SPOTenant` cached in `Test-SharePointOnline` (was called 13 times)
+  - `Get-CsTeamsMeetingPolicy` cached in `Test-MicrosoftTeams` (was called 9 times)
+  - `Get-CsTenantFederationConfiguration` cached in `Test-MicrosoftTeams` (was called 4 times)
+  - `Get-OrganizationConfig` cached in `Test-ExchangeOnline` (was called 4 times)
+  - `Get-MalwareFilterPolicy` cached in `Test-M365Defender` (was called 3 times)
+  - `Get-HostedContentFilterPolicy` cached in `Test-M365Defender` (was called 2 times)
+
+### Bug Fixes
+- **Fixed CIS 2.1.6**: Changed from `Get-HostedContentFilterPolicy` to correct cmdlet `Get-HostedOutboundSpamFilterPolicy` with proper properties (`NotifyOutboundSpamRecipients`, `NotifyOutboundSpam`)
+- **Fixed CIS 5.1.6.2**: Now accepts both compliant guest access levels - "limited access" (`10dae51f-b6af-4016-8d66-8c2a99b929b3`) and "most restrictive" (`2af84b1e-32c8-42b7-82bc-daa82404023b`) per CIS benchmark
+- **Fixed CIS 5.2.3.4**: Added missing `-All` parameter to `Get-MgReportAuthenticationMethodUserRegistrationDetail` to retrieve all users instead of only the first page
+- **Fixed CIS 5.3.4**: Replaced broken beta API (`roleManagementPolicies`) with `Get-MgPolicyRoleManagementPolicyAssignment` for Global Administrator PIM approval check
+- **Fixed CIS 5.3.5**: Same fix as 5.3.4 for Privileged Role Administrator PIM approval check
+- **Fixed SPO OAuth on PowerShell 7+** (Issue #4): Added `-UseWindowsPowerShell` when importing `Microsoft.Online.SharePoint.PowerShell` on PS 7+ to resolve authentication failures
+
+### New Cmdlet Support
+- **`Get-HostedOutboundSpamFilterPolicy`**: Now used for CIS 2.1.6 (replaces incorrect `Get-HostedContentFilterPolicy`)
+- **`Get-MgPolicyRoleManagementPolicyAssignment`**: Now used for CIS 5.3.4 and 5.3.5 PIM approval checks (replaces broken beta `roleManagementPolicies` API)
+- **Microsoft Graph beta `perUserMfaState` filter**: Now used for CIS 5.1.2.1 per-user MFA check (replaces deprecated `Get-MsolUser`)
+
+### Breaking Changes
+- **Removed MSOnline (MSOL) dependency** (Issue #8): MSOnline module was retired by Microsoft in March 2025
+  - Control 5.1.2.1 (Per-user MFA) now uses Microsoft Graph beta API instead of `Get-MsolUser`
+  - Falls back to "Manual" if Graph beta endpoint is unavailable
+  - MSOL is no longer installed, imported, or connected
+  - One fewer authentication prompt during service connection
+
+### Thanks
+- Thanks to ITEngineer-0815 for reporting fixes for controls 2.1.6, 5.1.6.2, 5.2.3.4, 5.3.4, and 5.3.5
+- Thanks to M0nk3yOo for reporting the SPO OAuth issue (#4)
+- Thanks to ozsaid for reporting the MSOL issue (#8)
+
 ## [2.5.7] - 2025-12-09
 
 ### 🔧 Maintenance
