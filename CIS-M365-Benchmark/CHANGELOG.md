@@ -2,6 +2,37 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.0.0] - 2026-02-21
+
+### Major Update: CIS Benchmark v6.0.0
+- **Upgraded from CIS Microsoft 365 Foundations Benchmark v5.0.0 to v6.0.0** (Issue #5)
+- Total controls updated from 130 to 140
+
+### New Controls (12 added in v6.0.0)
+- **1.3.9** (L1): Ensure shared bookings pages are restricted to select users
+- **2.1.15** (L1): Ensure outbound anti-spam message limits are in place
+- **5.1.3.2** (L1): Ensure users cannot create security groups
+- **5.1.4.1** (L2): Ensure the ability to join devices to Entra is restricted
+- **5.1.4.2** (L1): Ensure the maximum number of devices per user is limited
+- **5.1.4.3** (L1): Ensure the GA role is not added as a local administrator during Entra join
+- **5.1.4.4** (L1): Ensure local administrator assignment is limited during Entra join
+- **5.1.4.5** (L1): Ensure Local Administrator Password Solution is enabled
+- **5.1.4.6** (L2): Ensure users are restricted from recovering BitLocker keys
+- **5.2.3.7** (L2): Ensure the email OTP authentication method is disabled
+- **6.5.5** (L2): Ensure Direct Send submissions are rejected
+- **9.1.12** (L1): Ensure service principals ability to create workspaces, connections and deployment pipelines is restricted
+
+### Removed Controls (2 removed in v6.0.0)
+- **7.3.3**: Ensure custom script execution is restricted on personal sites (removed by CIS)
+- **7.3.4**: Ensure custom script execution is restricted on site collections (removed by CIS)
+
+### Branding
+- Added PowerShellNerd logo to HTML report header
+- Added PowerShellNerd floating action button linking to [powershellnerd.com](https://powershellnerd.com)
+
+### Thanks
+- Thanks to M0nk3yOo for requesting the v6.0.0 upgrade (Issue #5)
+
 ## [2.6.0] - 2026-02-21
 
 ### Performance
@@ -425,6 +456,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute to th
 
 ## Support
 
-- 🐛 [Report bugs](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues)
-- 💡 [Request features](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/issues)
-- 💬 [Ask questions](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark-v5.0.0/discussions)
+- 🐛 [Report bugs](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/issues)
+- 💡 [Request features](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/issues)
+- 💬 [Ask questions](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/discussions)

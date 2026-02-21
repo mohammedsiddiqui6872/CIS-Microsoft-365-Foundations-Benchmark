@@ -381,7 +381,7 @@ function Invoke-CISBenchmark {
     )
 
     begin {
-        Write-Verbose "Starting CIS Microsoft 365 Foundations Benchmark v5.0.0 Compliance Check"
+        Write-Verbose "Starting CIS Microsoft 365 Foundations Benchmark v6.0.0 Compliance Check"
 
         if ([string]::IsNullOrEmpty($TenantDomain) -or [string]::IsNullOrEmpty($SharePointAdminUrl)) {
             Write-Host ""
@@ -625,7 +625,7 @@ function Get-CISBenchmarkInfo {
 
     Write-Host ""
     Write-Host "================================================================" -ForegroundColor Cyan
-    Write-Host "  CIS Microsoft 365 Foundations Benchmark v5.0.0" -ForegroundColor Cyan
+    Write-Host "  CIS Microsoft 365 Foundations Benchmark v6.0.0" -ForegroundColor Cyan
     Write-Host "  PowerShell Module v$($module.Version)" -ForegroundColor Cyan
     Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host ""
