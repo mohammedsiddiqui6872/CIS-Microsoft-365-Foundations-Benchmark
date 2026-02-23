@@ -2,6 +2,13 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.0.4] - 2026-02-24
+
+### Fix
+- **Fixed malformed `-ErrorAction` parameters from v3.0.1**: Three `-ErrorAction Stop` additions landed on the wrong line (lines 251, 310, 1159), causing PowerShell to treat `-ErrorAction` as a standalone command instead of a parameter. Fixed by moving them back onto the same line as their cmdlet.
+- **Fixed typo `Stopd` in control 1.2.2**: `Get-MgUser` call had `-ErrorAction Stopd` (typo) plus a duplicate `-ErrorAction SilentlyContinue` on the same line
+- **Fixed property typo `AccountEnable`**: Changed to correct property name `AccountEnabled` in control 1.2.2
+
 ## [3.0.3] - 2026-02-23
 
 ### Fix

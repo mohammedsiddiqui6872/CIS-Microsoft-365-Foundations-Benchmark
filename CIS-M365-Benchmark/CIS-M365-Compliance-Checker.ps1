@@ -7,7 +7,7 @@
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 3.0.3
+    Version: 3.0.4
     Author: Mohammed Siddiqui
     Date: 2026-02-23
 
@@ -247,8 +247,8 @@ function Test-M365AdminCenter {
             $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -ErrorAction Stop
             foreach ($member in $members) {
                 if ($member.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user') {
-                    $user = Get-MgUser -UserId $member.Id -Property Id,UserPrincipalName,OnPremisesSyncEnabled
- -ErrorAction Stop                    if ($user.OnPremisesSyncEnabled) {
+                    $user = Get-MgUser -UserId $member.Id -Property Id,UserPrincipalName,OnPremisesSyncEnabled -ErrorAction Stop
+                    if ($user.OnPremisesSyncEnabled) {
                         $adminUsers += $user.UserPrincipalName
                     }
                 }
@@ -306,8 +306,8 @@ function Test-M365AdminCenter {
     try {
         Write-Log "Checking 1.2.1 - Public groups approval" -Level Info
         # Get all groups and filter by visibility property (Graph API filter doesn't support visibility)
-        $allGroups = Get-MgGroup -All -Property DisplayName,Visibility,Id
- -ErrorAction Stop        $publicGroups = $allGroups | Where-Object { $_.Visibility -eq 'Public' }
+        $allGroups = Get-MgGroup -All -Property DisplayName,Visibility,Id -ErrorAction Stop
+        $publicGroups = $allGroups | Where-Object { $_.Visibility -eq 'Public' }
 
         if ($publicGroups.Count -eq 0) {
             Add-Result -ControlNumber "1.2.1" -ControlTitle "Ensure that only organizationally managed/approved public groups exist" `
@@ -332,7 +332,7 @@ function Test-M365AdminCenter {
         $enabledSharedMB = @()
 
         foreach ($mb in $sharedMailboxes) {
-            $user = Get-MgUser -UserId $mb.ExternalDirectoryObjectId -Property AccountEnable -ErrorAction Stopd -ErrorAction SilentlyContinue
+            $user = Get-MgUser -UserId $mb.ExternalDirectoryObjectId -Property AccountEnabled -ErrorAction SilentlyContinue
             if ($user.AccountEnabled) {
                 $enabledSharedMB += $mb.UserPrincipalName
             }
@@ -1154,9 +1154,9 @@ function Test-EntraID {
 
         foreach ($group in $guestGroups) {
             # Get the full group details including MembershipRule
-            $groupDetails = Get-MgGroup -GroupId $group.Id
+            $groupDetails = Get-MgGroup -GroupId $group.Id -ErrorAction Stop
 
- -ErrorAction Stop            # Check for various formats of the membership rule
+            # Check for various formats of the membership rule
             # Common formats: user.userType -eq "Guest", (user.userType -eq "Guest"), user.userType -eq 'Guest'
             if ($groupDetails.MembershipRule -and
                 ($groupDetails.MembershipRule -match "user\.userType\s*-eq\s*[`"']?Guest[`"']?" -or
