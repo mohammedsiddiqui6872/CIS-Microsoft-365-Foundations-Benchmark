@@ -2,6 +2,16 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.0.5] - 2026-02-24
+
+### Fix
+- **Fixed false positive DMARC check on `*.onmicrosoft.com` domains (Issue #9)**: Control 2.1.10 now skips `*.onmicrosoft.com` and `*.mail.onmicrosoft.com` domains since DMARC for these is managed by Microsoft and cannot be configured by tenants
+- **Fixed false positive SPF check on `*.onmicrosoft.com` domains**: Control 2.1.8 now also skips Microsoft-managed onmicrosoft.com domains
+- **Fixed false positive DKIM check on `*.onmicrosoft.com` domains**: Control 2.1.9 now excludes Microsoft-managed onmicrosoft.com domains from the disabled DKIM check
+
+### Thanks
+- Thanks to [heysurfer](https://github.com/heysurfer) for reporting the issue (#9)
+
 ## [3.0.4] - 2026-02-24
 
 ### Fix

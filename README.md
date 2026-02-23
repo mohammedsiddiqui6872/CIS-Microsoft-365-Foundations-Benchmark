@@ -9,7 +9,12 @@
 
 A comprehensive PowerShell module that audits your Microsoft 365 environment against **all 140 CIS Microsoft 365 Foundations Benchmark v6.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
-## What's New in v3.0.3
+## What's New in v3.0.5
+
+**v3.0.5 - Fix False Positive on onmicrosoft.com Domains (Issue #9)**
+- **DMARC check (2.1.10)** no longer falsely flags `*.onmicrosoft.com` domains - DMARC is managed by Microsoft
+- **SPF check (2.1.8)** and **DKIM check (2.1.9)** also skip Microsoft-managed onmicrosoft.com domains
+- Thanks to [heysurfer](https://github.com/heysurfer) for reporting
 
 **v3.0.3 - Device Code Authentication Fix**
 - **Device code auth now works for all services**: `-UseDeviceCode` now propagates to SharePoint Online (`-UseSystemBrowser $true`) and Teams (`-UseDeviceAuthentication`)
@@ -347,7 +352,7 @@ The script generates two types of reports:
 ```
 ================================================================
   CIS Microsoft 365 Foundations Benchmark v6.0.0
-  Compliance Checker v3.0.3
+  Compliance Checker v3.0.5
 ================================================================
 
 [2026-02-21 15:30:08] [Info] Checking required PowerShell modules...

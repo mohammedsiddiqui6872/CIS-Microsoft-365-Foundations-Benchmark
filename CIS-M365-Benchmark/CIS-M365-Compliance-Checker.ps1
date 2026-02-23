@@ -7,9 +7,9 @@
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 3.0.4
+    Version: 3.0.5
     Author: Mohammed Siddiqui
-    Date: 2026-02-23
+    Date: 2026-02-24
 
     Required PowerShell Modules:
     - Microsoft.Graph (Install-Module Microsoft.Graph -Scope CurrentUser)
@@ -625,6 +625,11 @@ function Test-M365Defender {
 
         foreach ($domain in $acceptedDomains) {
             if ($domain.DomainType -eq "Authoritative") {
+                # Skip *.onmicrosoft.com domains - SPF is managed by Microsoft
+                if ($domain.DomainName -like "*.onmicrosoft.com") {
+                    Write-Log "Skipping $($domain.DomainName) - Microsoft-managed domain" -Level Info
+                    continue
+                }
                 try {
                     $spfRecord = Resolve-DnsName -Name $domain.DomainName -Type TXT -ErrorAction SilentlyContinue |
                                  Where-Object { $_.Strings -like "*v=spf1*" }
@@ -657,7 +662,8 @@ function Test-M365Defender {
     try {
         Write-Log "Checking 2.1.9 - DKIM enabled" -Level Info
         $dkimConfigs = Get-DkimSigningConfig
-        $disabledDkim = $dkimConfigs | Where-Object { $_.Enabled -eq $false }
+        # Exclude *.onmicrosoft.com domains - DKIM is managed by Microsoft
+        $disabledDkim = $dkimConfigs | Where-Object { $_.Enabled -eq $false -and $_.Domain -notlike "*.onmicrosoft.com" }
 
         if ($disabledDkim.Count -eq 0) {
             Add-Result -ControlNumber "2.1.9" -ControlTitle "Ensure that DKIM is enabled for all Exchange Online Domains" `
@@ -683,6 +689,11 @@ function Test-M365Defender {
 
         foreach ($domain in $acceptedDomains) {
             if ($domain.DomainType -eq "Authoritative") {
+                # Skip *.onmicrosoft.com domains - DMARC is managed by Microsoft and cannot be added by tenants
+                if ($domain.DomainName -like "*.onmicrosoft.com") {
+                    Write-Log "Skipping $($domain.DomainName) - Microsoft-managed domain" -Level Info
+                    continue
+                }
                 try {
                     $dmarcRecord = Resolve-DnsName -Name "_dmarc.$($domain.DomainName)" -Type TXT -ErrorAction SilentlyContinue |
                                    Where-Object { $_.Strings -like "*v=DMARC1*" }
