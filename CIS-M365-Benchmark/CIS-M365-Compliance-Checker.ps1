@@ -7,7 +7,7 @@
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 3.0.2
+    Version: 3.0.3
     Author: Mohammed Siddiqui
     Date: 2026-02-23
 
@@ -203,7 +203,7 @@ function Connect-M365Services {
             }
         }
         if ($useDeviceAuth) {
-            Connect-SPOService -Url $SharePointAdminUrl -ModernAuth -UseSystemBrowser -ErrorAction Stop
+            Connect-SPOService -Url $SharePointAdminUrl -UseSystemBrowser $true -ErrorAction Stop
         } else {
             Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
         }
