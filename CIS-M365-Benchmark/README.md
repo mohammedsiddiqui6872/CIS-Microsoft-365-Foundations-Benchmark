@@ -1,6 +1,6 @@
 # CIS Microsoft 365 Foundations Benchmark v6.0.0 - Automated Compliance Checker
 
-[![PowerShell Gallery Version](https://img.shields.io/badge/Version-3.0.0-blue.svg)](https://www.powershellgallery.com/packages/CIS-M365-Benchmark)
+[![PowerShell Gallery Version](https://img.shields.io/badge/Version-3.0.2-blue.svg)](https://www.powershellgallery.com/packages/CIS-M365-Benchmark)
 [![PowerShell Gallery Downloads](https://img.shields.io/powershellgallery/dt/CIS-M365-Benchmark.svg)](https://www.powershellgallery.com/packages/CIS-M365-Benchmark)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B%20%7C%207%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -9,9 +9,14 @@
 
 A comprehensive PowerShell module that audits your Microsoft 365 environment against **all 140 CIS Microsoft 365 Foundations Benchmark v6.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
-## What's New in v3.0.0
+## What's New in v3.0.2
 
-**CIS Benchmark v6.0.0 Upgrade**
+**v3.0.2 - Device Code Authentication Fix**
+- **Device code auth now works for all services**: `-UseDeviceCode` now propagates to SharePoint Online (`-ModernAuth -UseSystemBrowser`) and Teams (`-UseDeviceAuthentication`)
+- **Device code now works on PowerShell 7+**: Previously ignored on PS 7+, now works on both PS 5.1 and 7+
+- Thanks to Mateusz Jagiello for identifying and testing the fix
+
+**v3.0.0 - CIS Benchmark v6.0.0 Upgrade**
 
 - **12 New Controls Added** (140 total, up from 130):
   - 1.3.9 - Shared bookings page restrictions
@@ -408,7 +413,7 @@ The script generates two types of reports:
 ```
 ================================================================
   CIS Microsoft 365 Foundations Benchmark v6.0.0
-  Compliance Checker v3.0.0
+  Compliance Checker v3.0.2
 ================================================================
 
 [2026-02-21 15:30:12] [Info] Checking required PowerShell modules...

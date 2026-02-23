@@ -7,9 +7,9 @@
     Generates detailed HTML and CSV reports showing compliance status for each control.
 
 .NOTES
-    Version: 3.0.1
+    Version: 3.0.2
     Author: Mohammed Siddiqui
-    Date: 2026-02-21
+    Date: 2026-02-23
 
     Required PowerShell Modules:
     - Microsoft.Graph (Install-Module Microsoft.Graph -Scope CurrentUser)
@@ -163,6 +163,9 @@ function Connect-M365Services {
     Write-Log "Connecting to Microsoft 365 services..." -Level Info
     Write-Log "NOTE: You will be prompted to sign in once. The same session will be used for all services." -Level Info
 
+    # Check if device code authentication was requested via Connect-CISBenchmark -UseDeviceCode
+    $useDeviceAuth = $env:CIS_USE_DEVICE_CODE -eq "true"
+
     try {
         # Check if Microsoft Graph is already connected (e.g., via Connect-CISBenchmark)
         $mgContext = Get-MgContext -ErrorAction SilentlyContinue
@@ -199,12 +202,20 @@ function Connect-M365Services {
                 Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -WarningAction SilentlyContinue -DisableNameChecking -Force
             }
         }
-        Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
+        if ($useDeviceAuth) {
+            Connect-SPOService -Url $SharePointAdminUrl -ModernAuth -UseSystemBrowser -ErrorAction Stop
+        } else {
+            Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
+        }
         Write-Log "Connected to SharePoint Online" -Level Success
 
         # Connect to Microsoft Teams using the same account
         Write-Log "Connecting to Microsoft Teams..." -Level Info
-        Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
+        if ($useDeviceAuth) {
+            Connect-MicrosoftTeams -TenantId $tenantId -UseDeviceAuthentication -ErrorAction Stop | Out-Null
+        } else {
+            Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
+        }
         Write-Log "Connected to Microsoft Teams" -Level Success
 
         # MSOnline module has been retired (March 2025)

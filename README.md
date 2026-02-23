@@ -9,9 +9,14 @@
 
 A comprehensive PowerShell module that audits your Microsoft 365 environment against **all 140 CIS Microsoft 365 Foundations Benchmark v6.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
-## What's New in v3.0.0
+## What's New in v3.0.2
 
-**CIS Benchmark v6.0.0 Upgrade**
+**v3.0.2 - Device Code Authentication Fix**
+- **Device code auth now works for all services**: `-UseDeviceCode` now propagates to SharePoint Online (`-ModernAuth -UseSystemBrowser`) and Teams (`-UseDeviceAuthentication`)
+- **Device code now works on PowerShell 7+**: Previously ignored on PS 7+, now works on both PS 5.1 and 7+
+- Thanks to Mateusz Jagiello for identifying and testing the fix
+
+**v3.0.0 - CIS Benchmark v6.0.0 Upgrade**
 
 - **12 New Controls Added** (140 total, up from 130):
   - 1.3.9 - Shared bookings page restrictions
@@ -342,7 +347,7 @@ The script generates two types of reports:
 ```
 ================================================================
   CIS Microsoft 365 Foundations Benchmark v6.0.0
-  Compliance Checker v3.0.0
+  Compliance Checker v3.0.2
 ================================================================
 
 [2026-02-21 15:30:08] [Info] Checking required PowerShell modules...

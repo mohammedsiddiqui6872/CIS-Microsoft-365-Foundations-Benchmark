@@ -2,6 +2,15 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.0.2] - 2026-02-23
+
+### Fix
+- **Device code authentication now works for all services**: When using `Connect-CISBenchmark -UseDeviceCode`, the device-friendly authentication is now propagated to SharePoint Online (`-ModernAuth -UseSystemBrowser`) and Microsoft Teams (`-UseDeviceAuthentication`) instead of falling back to interactive browser/Authenticator prompts
+- **Device code now works on PowerShell 7+**: Previously `-UseDeviceCode` was silently ignored on PS 7+; now it correctly uses device code authentication on both PS 5.1 and PS 7+
+
+### Thanks
+- Thanks to Mateusz Jagiello for identifying the fix and testing device code authentication across all services
+
 ## [3.0.1] - 2026-02-21
 
 ### Fix

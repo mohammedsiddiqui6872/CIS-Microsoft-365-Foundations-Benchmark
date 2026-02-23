@@ -258,6 +258,11 @@ function Connect-CISBenchmark {
         if ($PSVersionTable.PSVersion.Major -ge 7) {
             Write-Host "PowerShell 7+ detected" -ForegroundColor Cyan
 
+            # If UseDeviceCode is requested, set env var for downstream connections (SPO, Teams)
+            if ($UseDeviceCode) {
+                $env:CIS_USE_DEVICE_CODE = "true"
+            }
+
             # PowerShell 7 has known issues with certain authentication methods
             # We'll use a workaround by setting environment variables
             Write-Host "Configuring authentication for PowerShell 7 compatibility..." -ForegroundColor Yellow
@@ -265,30 +270,44 @@ function Connect-CISBenchmark {
             # Set environment variable to disable problematic authentication methods
             $env:AZURE_IDENTITY_DISABLE_MULTITENANTAUTH = "true"
 
-            # Try different authentication methods in order
-            $authMethods = @(
-                @{
-                    Name = "Interactive Browser"
-                    Params = @{
-                        Scopes = $Scopes
-                        NoWelcome = $true
+            # If device code was requested, use it directly
+            if ($UseDeviceCode) {
+                $authMethods = @(
+                    @{
+                        Name = "Device Code"
+                        Params = @{
+                            Scopes = $Scopes
+                            NoWelcome = $true
+                            UseDeviceCode = $true
+                        }
                     }
-                },
-                @{
-                    Name = "Web Account Manager"
-                    Params = @{
-                        Scopes = $Scopes
-                        NoWelcome = $true
-                        ClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
+                )
+            } else {
+                # Try different authentication methods in order
+                $authMethods = @(
+                    @{
+                        Name = "Interactive Browser"
+                        Params = @{
+                            Scopes = $Scopes
+                            NoWelcome = $true
+                        }
+                    },
+                    @{
+                        Name = "Web Account Manager"
+                        Params = @{
+                            Scopes = $Scopes
+                            NoWelcome = $true
+                            ClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
+                        }
+                    },
+                    @{
+                        Name = "Minimal Parameters"
+                        Params = @{
+                            Scopes = $Scopes
+                        }
                     }
-                },
-                @{
-                    Name = "Minimal Parameters"
-                    Params = @{
-                        Scopes = $Scopes
-                    }
-                }
-            )
+                )
+            }
 
             $connected = $false
             foreach ($method in $authMethods) {
@@ -324,6 +343,8 @@ function Connect-CISBenchmark {
             # PowerShell 5.1 - use standard authentication
             if ($UseDeviceCode) {
                 $params['UseDeviceCode'] = $true
+                # Set environment variable so downstream connections (SPO, Teams) also use device-friendly auth
+                $env:CIS_USE_DEVICE_CODE = "true"
             }
             Connect-MgGraph @params
         }
