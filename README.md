@@ -216,6 +216,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - GitHub: [@mohammedsiddiqui6872](https://github.com/mohammedsiddiqui6872)
 - LinkedIn: [Let's Chat!](https://www.linkedin.com/in/mohammedsiddiqui6872/)
 - Website: [PowerShellNerd](https://powershellnerd.com)
+- Profile: [PowerShellNerd Profile](https://powershellnerd.com/profile/mohammedsiddiqui)
 - Support: [Buy Me a Coffee](https://buymeacoffee.com/mohammedsiddiqui)
 
 ## Acknowledgments
