@@ -135,6 +135,18 @@ For DLP checks, you need:
 Connect-IPPSSession  # Information Protection and Compliance
 ```
 
+## Microsoft Fabric / Power BI Permissions
+
+| Role | Required | Purpose |
+|------|----------|---------|
+| **Power BI Administrator** | Yes | Read Power BI tenant settings |
+| **Fabric Administrator** | Alternative | Full access to Fabric/Power BI settings |
+
+### How to Assign Power BI Roles
+1. Go to Microsoft 365 Admin Center > Users > Active users
+2. Select the user > Roles
+3. Assign "Power BI Administrator" or "Fabric Administrator" role
+
 ## MSOnline (Legacy) - Optional
 
 The script attempts to connect to MSOnline for legacy per-user MFA checks.
@@ -174,6 +186,7 @@ If Global Reader is not available, assign these specific roles:
 # - Teams Administrator (or read-only)
 # - Exchange Administrator (View-Only Organization Management)
 # - Intune Read-Only Operator
+# - Power BI Administrator
 ```
 
 ## Service-Specific Connection Commands
@@ -206,6 +219,11 @@ Connect-MicrosoftTeams
 Connect-IPPSSession
 ```
 
+### Power BI / Microsoft Fabric
+```powershell
+Connect-PowerBIServiceAccount
+```
+
 ## Testing Your Permissions
 
 Before running the full compliance check, test your permissions:
@@ -227,6 +245,10 @@ Get-SPOTenant
 # Test Teams access
 Connect-MicrosoftTeams
 Get-CsTenant
+
+# Test Power BI access
+Connect-PowerBIServiceAccount
+Invoke-PowerBIRestMethod -Url "admin/tenantsettings" -Method GET
 ```
 
 If all commands return data without errors, you have the necessary permissions.
@@ -293,6 +315,7 @@ Before running the script, ensure you have:
 - [ ] SharePoint Administrator (or Global Reader)
 - [ ] Teams Administrator (or Global Reader)
 - [ ] Intune Read-Only Operator (if using Intune)
+- [ ] Power BI Administrator (for Section 9 checks)
 - [ ] All PowerShell modules installed
 - [ ] Network access to Microsoft 365 endpoints
 - [ ] MFA configured on your account

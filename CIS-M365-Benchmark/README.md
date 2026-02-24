@@ -196,8 +196,8 @@ The script performs comprehensive checks across **9 major sections**:
 | **Section 6: Exchange** | 12 | 11 | 1 | 92% |
 | **Section 7: SharePoint** | 13 | 12 | 1 | 92% |
 | **Section 8: Teams** | 17 | 17 | 0 | 100% |
-| **Section 9: Power BI** | 12 | 0 | 12 | 0% |
-| **TOTAL** | **140** | **92** | **48** | **66%** |
+| **Section 9: Power BI** | 12 | 12 | 0 | 100% |
+| **TOTAL** | **140** | **104** | **36** | **74%** |
 
 ## Installation
 

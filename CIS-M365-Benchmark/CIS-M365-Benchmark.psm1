@@ -9,7 +9,8 @@ function Script:Install-PrerequisitesAutomatically {
         @{ Name = "Microsoft.Graph"; MinVersion = "2.0.0" }
         @{ Name = "ExchangeOnlineManagement"; MinVersion = $null }
         @{ Name = "Microsoft.Online.SharePoint.PowerShell"; MinVersion = $null }
-        @{ Name = "MicrosoftTeams"; MinVersion = $null }
+        @{ Name = "MicrosoftTeams"; MinVersion = $null },
+        @{ Name = "MicrosoftPowerBIMgmt"; MinVersion = $null }
     )
 
     $missing = @()
@@ -55,12 +56,12 @@ function Script:Install-PrerequisitesAutomatically {
                     Write-Host ""
                     Write-Host "    Removing outdated Microsoft.Graph versions..." -ForegroundColor Gray
                     Get-InstalledModule -Name "Microsoft.Graph" -AllVersions -ErrorAction SilentlyContinue |
-                        Where-Object { $_.Version -lt [Version]"2.0.0" } |
-                        ForEach-Object {
-                            Write-Host "    Uninstalling v$($_.Version)..." -NoNewline -ForegroundColor Gray
-                            Uninstall-Module -Name "Microsoft.Graph" -RequiredVersion $_.Version -Force -ErrorAction SilentlyContinue
-                            Write-Host " [OK]" -ForegroundColor Green
-                        }
+                    Where-Object { $_.Version -lt [Version]"2.0.0" } |
+                    ForEach-Object {
+                        Write-Host "    Uninstalling v$($_.Version)..." -NoNewline -ForegroundColor Gray
+                        Uninstall-Module -Name "Microsoft.Graph" -RequiredVersion $_.Version -Force -ErrorAction SilentlyContinue
+                        Write-Host " [OK]" -ForegroundColor Green
+                    }
 
                     Write-Host "    Installing latest Microsoft.Graph..." -NoNewline -ForegroundColor Gray
                     Install-Module -Name "Microsoft.Graph" -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
@@ -166,12 +167,12 @@ function Script:Fix-MicrosoftGraphVersion {
 
             try {
                 Get-InstalledModule -Name Microsoft.Graph -AllVersions -ErrorAction SilentlyContinue |
-                    Where-Object { $_.Version -lt [Version]"2.0.0" } |
-                    ForEach-Object {
-                        Write-Host "  Removing old version $($_.Version)..." -NoNewline -ForegroundColor Gray
-                        Uninstall-Module -Name Microsoft.Graph -RequiredVersion $_.Version -Force -ErrorAction SilentlyContinue
-                        Write-Host " [OK]" -ForegroundColor Green
-                    }
+                Where-Object { $_.Version -lt [Version]"2.0.0" } |
+                ForEach-Object {
+                    Write-Host "  Removing old version $($_.Version)..." -NoNewline -ForegroundColor Gray
+                    Uninstall-Module -Name Microsoft.Graph -RequiredVersion $_.Version -Force -ErrorAction SilentlyContinue
+                    Write-Host " [OK]" -ForegroundColor Green
+                }
 
                 Write-Host "  Installing latest Microsoft.Graph..." -NoNewline -ForegroundColor White
                 Install-Module -Name Microsoft.Graph -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop -WarningAction SilentlyContinue
@@ -209,7 +210,7 @@ if (-not $Script:PrerequisiteCheckRun) {
 function Connect-CISBenchmark {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory=$false)]
+        [Parameter(Mandatory = $false)]
         [string[]]$Scopes = @(
             "Organization.Read.All",
             "Directory.Read.All",
@@ -242,16 +243,17 @@ function Connect-CISBenchmark {
             $missingScopes = $Scopes | Where-Object { $_ -notin $currentContext.Scopes }
             if ($missingScopes) {
                 Write-Host "`nMissing required scopes. Reconnecting..." -ForegroundColor Yellow
-            } else {
+            }
+            else {
                 Write-Host "`nYou can now run: Invoke-CISBenchmark`n" -ForegroundColor Yellow
                 return $currentContext
             }
         }
 
         $params = @{
-            Scopes        = $Scopes
-            NoWelcome     = $true
-            ContextScope  = 'Process'
+            Scopes       = $Scopes
+            NoWelcome    = $true
+            ContextScope = 'Process'
         }
 
         # PowerShell 7 specific handling
@@ -274,34 +276,35 @@ function Connect-CISBenchmark {
             if ($UseDeviceCode) {
                 $authMethods = @(
                     @{
-                        Name = "Device Code"
+                        Name   = "Device Code"
                         Params = @{
-                            Scopes = $Scopes
-                            NoWelcome = $true
+                            Scopes        = $Scopes
+                            NoWelcome     = $true
                             UseDeviceCode = $true
                         }
                     }
                 )
-            } else {
+            }
+            else {
                 # Try different authentication methods in order
                 $authMethods = @(
                     @{
-                        Name = "Interactive Browser"
+                        Name   = "Interactive Browser"
                         Params = @{
-                            Scopes = $Scopes
+                            Scopes    = $Scopes
                             NoWelcome = $true
                         }
                     },
                     @{
-                        Name = "Web Account Manager"
+                        Name   = "Web Account Manager"
                         Params = @{
-                            Scopes = $Scopes
+                            Scopes    = $Scopes
                             NoWelcome = $true
-                            ClientId = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
+                            ClientId  = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
                         }
                     },
                     @{
-                        Name = "Minimal Parameters"
+                        Name   = "Minimal Parameters"
                         Params = @{
                             Scopes = $Scopes
                         }
@@ -378,26 +381,26 @@ function Invoke-CISBenchmark {
     [CmdletBinding()]
     [OutputType([PSCustomObject])]
     param(
-        [Parameter(Mandatory=$false, Position=0, HelpMessage="Your M365 tenant domain (e.g., contoso.onmicrosoft.com). If not provided, will be auto-detected.")]
+        [Parameter(Mandatory = $false, Position = 0, HelpMessage = "Your M365 tenant domain (e.g., contoso.onmicrosoft.com). If not provided, will be auto-detected.")]
         [string]$TenantDomain,
 
-        [Parameter(Mandatory=$false, Position=1, HelpMessage="SharePoint admin URL (e.g., https://contoso-admin.sharepoint.com). If not provided, will be auto-detected.")]
+        [Parameter(Mandatory = $false, Position = 1, HelpMessage = "SharePoint admin URL (e.g., https://contoso-admin.sharepoint.com). If not provided, will be auto-detected.")]
         [ValidatePattern('^https://.*-admin\.sharepoint\.com/?$')]
         [string]$SharePointAdminUrl,
 
-        [Parameter(Mandatory=$false)]
-        [ValidateScript({Test-Path -Path $_ -PathType Container -IsValid})]
+        [Parameter(Mandatory = $false)]
+        [ValidateScript({ Test-Path -Path $_ -PathType Container -IsValid })]
         [string]$OutputPath = ".",
 
-        [Parameter(Mandatory=$false)]
-        [ValidateSet('L1','L2','All')]
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('L1', 'L2', 'All')]
         [string]$ProfileLevel = 'All',
 
-        [Parameter(Mandatory=$false)]
-        [ValidateSet('Both','HTML','CSV')]
+        [Parameter(Mandatory = $false)]
+        [ValidateSet('Both', 'HTML', 'CSV')]
         [string]$Format = 'Both',
 
-        [Parameter(Mandatory=$false)]
+        [Parameter(Mandatory = $false)]
         [string[]]$Sections
     )
 
@@ -424,7 +427,7 @@ function Invoke-CISBenchmark {
                     Write-Host "Attempting automatic authentication..." -ForegroundColor Yellow
 
                     try {
-                        Connect-MgGraph -Scopes "Organization.Read.All","Directory.Read.All" -ErrorAction Stop | Out-Null
+                        Connect-MgGraph -Scopes "Organization.Read.All", "Directory.Read.All" -ErrorAction Stop | Out-Null
                         $graphContext = Get-MgContext
                         Write-Host "Authentication successful!" -ForegroundColor Green
                     }
@@ -455,7 +458,8 @@ function Invoke-CISBenchmark {
                     $verifiedDomains = $orgDetails.VerifiedDomains | Where-Object { $_.Name -like "*.onmicrosoft.com" }
                     if ($verifiedDomains) {
                         $TenantDomain = @($verifiedDomains)[0].Name
-                    } else {
+                    }
+                    else {
                         $TenantDomain = @($orgDetails.VerifiedDomains)[0].Name
                     }
                     Write-Host "  Detected Tenant Domain: $TenantDomain" -ForegroundColor Green
@@ -504,10 +508,10 @@ function Invoke-CISBenchmark {
             $cleanSharePointUrl = $SharePointAdminUrl.TrimEnd('/')
 
             $scriptParams = @{
-                TenantDomain = $TenantDomain
+                TenantDomain       = $TenantDomain
                 SharePointAdminUrl = $cleanSharePointUrl
-                OutputPath = $OutputPath
-                ProfileLevel = $ProfileLevel
+                OutputPath         = $OutputPath
+                ProfileLevel       = $ProfileLevel
             }
 
             Write-Verbose "Executing CIS compliance checker script..."
@@ -517,12 +521,12 @@ function Invoke-CISBenchmark {
             Write-Verbose "Generating summary report..."
 
             $htmlReport = Get-ChildItem -Path $OutputPath -Filter "CIS-M365-Compliance-Report_*.html" -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending |
-                Select-Object -First 1
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
             $csvReport = Get-ChildItem -Path $OutputPath -Filter "CIS-M365-Compliance-Report_*.csv" -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending |
-                Select-Object -First 1
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
 
             if ($csvReport) {
                 $reportData = Import-Csv -Path $csvReport.FullName
@@ -534,22 +538,23 @@ function Invoke-CISBenchmark {
 
                 $complianceRate = if ($total -gt 0 -and ($total - $manual) -gt 0) {
                     [math]::Round(($passed / ($total - $manual)) * 100, 2)
-                } else {
+                }
+                else {
                     0
                 }
 
                 $summary = [PSCustomObject]@{
-                    TenantDomain = $TenantDomain
-                    ProfileLevel = $ProfileLevel
-                    TotalControls = $total
-                    Passed = $passed
-                    Failed = $failed
-                    Manual = $manual
-                    Errors = $errors
+                    TenantDomain   = $TenantDomain
+                    ProfileLevel   = $ProfileLevel
+                    TotalControls  = $total
+                    Passed         = $passed
+                    Failed         = $failed
+                    Manual         = $manual
+                    Errors         = $errors
                     ComplianceRate = $complianceRate
-                    Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                    HtmlReport = if ($htmlReport) { $htmlReport.FullName } else { $null }
-                    CsvReport = if ($csvReport) { $csvReport.FullName } else { $null }
+                    Timestamp      = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+                    HtmlReport     = if ($htmlReport) { $htmlReport.FullName } else { $null }
+                    CsvReport      = if ($csvReport) { $csvReport.FullName } else { $null }
                 }
 
                 return $summary
@@ -571,25 +576,25 @@ function Invoke-CISBenchmark {
 }
 
 function Get-CISBenchmarkControl {
-    [CmdletBinding(DefaultParameterSetName='All')]
+    [CmdletBinding(DefaultParameterSetName = 'All')]
     [OutputType([PSCustomObject[]])]
     param(
-        [Parameter(ParameterSetName='ByControl', Position=0)]
+        [Parameter(ParameterSetName = 'ByControl', Position = 0)]
         [string[]]$ControlNumber,
 
-        [Parameter(ParameterSetName='BySection')]
-        [ValidateSet('1','2','3','4','5','6','7','8','9')]
+        [Parameter(ParameterSetName = 'BySection')]
+        [ValidateSet('1', '2', '3', '4', '5', '6', '7', '8', '9')]
         [string]$Section,
 
         [Parameter()]
-        [ValidateSet('L1','L2','All')]
+        [ValidateSet('L1', 'L2', 'All')]
         [string]$ProfileLevel = 'All'
     )
 
     $controls = @(
-        [PSCustomObject]@{ControlNumber="1.1.1"; Title="Ensure Administrative accounts are cloud-only"; Section="1"; ProfileLevel="L1"; Automated=$true}
-        [PSCustomObject]@{ControlNumber="1.1.2"; Title="Ensure two emergency access accounts have been defined"; Section="1"; ProfileLevel="L1"; Automated=$false}
-        [PSCustomObject]@{ControlNumber="1.1.3"; Title="Ensure that between two and four global admins are designated"; Section="1"; ProfileLevel="L1"; Automated=$true}
+        [PSCustomObject]@{ControlNumber = "1.1.1"; Title = "Ensure Administrative accounts are cloud-only"; Section = "1"; ProfileLevel = "L1"; Automated = $true }
+        [PSCustomObject]@{ControlNumber = "1.1.2"; Title = "Ensure two emergency access accounts have been defined"; Section = "1"; ProfileLevel = "L1"; Automated = $false }
+        [PSCustomObject]@{ControlNumber = "1.1.3"; Title = "Ensure that between two and four global admins are designated"; Section = "1"; ProfileLevel = "L1"; Automated = $true }
     )
 
     $results = $controls
@@ -615,10 +620,11 @@ function Test-CISBenchmarkPrerequisites {
     param()
 
     $requiredModules = @(
-        @{Name="Microsoft.Graph"; Required=$true}
-        @{Name="ExchangeOnlineManagement"; Required=$true}
-        @{Name="Microsoft.Online.SharePoint.PowerShell"; Required=$true}
-        @{Name="MicrosoftTeams"; Required=$true}
+        @{Name = "Microsoft.Graph"; Required = $true }
+        @{Name = "ExchangeOnlineManagement"; Required = $true }
+        @{Name = "Microsoft.Online.SharePoint.PowerShell"; Required = $true }
+        @{Name = "MicrosoftTeams"; Required = $true }
+        @{Name = "MicrosoftPowerBIMgmt"; Required = $true }
     )
 
     $results = @()
@@ -627,11 +633,11 @@ function Test-CISBenchmarkPrerequisites {
         $installed = Get-Module -ListAvailable -Name $module.Name | Select-Object -First 1
 
         $results += [PSCustomObject]@{
-            Module = $module.Name
+            Module    = $module.Name
             Installed = $null -ne $installed
-            Version = if ($installed) { $installed.Version.ToString() } else { "Not Installed" }
-            Required = $module.Required
-            Status = if ($null -ne $installed) { "[OK] Installed" } elseif ($module.Required) { "[!] Required - Not Installed" } else { "[*] Optional - Not Installed" }
+            Version   = if ($installed) { $installed.Version.ToString() } else { "Not Installed" }
+            Required  = $module.Required
+            Status    = if ($null -ne $installed) { "[OK] Installed" } elseif ($module.Required) { "[!] Required - Not Installed" } else { "[*] Optional - Not Installed" }
         }
     }
 

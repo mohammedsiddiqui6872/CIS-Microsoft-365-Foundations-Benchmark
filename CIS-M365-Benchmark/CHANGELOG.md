@@ -2,6 +2,19 @@
 
 All notable changes to the CIS Microsoft 365 Foundations Benchmark Compliance Checker will be documented in this file.
 
+## [3.1.0] - 2026-02-24
+
+### ✨ New Features
+- **Fully Automated Section 9 (Power BI / Microsoft Fabric)**: 
+  - Increased overall automation coverage of the tool from 66% to 74%.
+  - Added `MicrosoftPowerBIMgmt` to the required modules list.
+  - Implemented automated REST API calls (`Invoke-PowerBIRestMethod`) to validate all 12 controls in Section 9 (Controls 9.1.1 through 9.1.12).
+  - Added support for `Connect-PowerBIServiceAccount` during the initial M365 services connection phase.
+
+### 📝 Documentation
+- Updated `README.md` to reflect the new 74% automation coverage (104 automated controls out of 140).
+- Updated `PERMISSIONS.md` to include the `Power BI Administrator` or `Fabric Administrator` role requirement for executing Section 9.
+
 ## [3.0.5] - 2026-02-24
 
 ### Fix
@@ -300,7 +313,7 @@ Get-Command -Module CIS-M365-Benchmark
 
 # Run compliance check
 Invoke-CISBenchmark -TenantDomain "tenant.onmicrosoft.com" `
-                    -SharePointAdminUrl "https://tenant-admin.sharepoint.com"
+                    -SharePointAdminUrl "[https://tenant-admin.sharepoint.com](https://tenant-admin.sharepoint.com)"
 
 # Check prerequisites
 Test-CISBenchmarkPrerequisites
@@ -321,7 +334,7 @@ Install-Module CIS-M365-Benchmark
 Install-Module CIS-M365-Benchmark
 Import-Module CIS-M365-Benchmark
 Invoke-CISBenchmark -TenantDomain "tenant.onmicrosoft.com" `
-                    -SharePointAdminUrl "https://tenant-admin.sharepoint.com"
+                    -SharePointAdminUrl "[https://tenant-admin.sharepoint.com](https://tenant-admin.sharepoint.com)"
 ```
 
 **For direct script users:**
@@ -455,7 +468,7 @@ git pull origin main
 # Run with same parameters as before
 .\CIS-M365-Compliance-Checker.ps1 `
     -TenantDomain "your-tenant.onmicrosoft.com" `
-    -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
+    -SharePointAdminUrl "[https://your-tenant-admin.sharepoint.com](https://your-tenant-admin.sharepoint.com)"
 ```
 
 ### New Permissions Required (v2.0)
@@ -470,7 +483,7 @@ No action required if using Global Reader role - this already includes these per
 
 ### Planned for v2.1
 - [ ] Certificate-based authentication for automation
-- [ ] Power BI module integration for Section 9
+- [x] Power BI module integration for Section 9
 - [ ] Custom report templates
 - [ ] Compliance trend tracking over time
 - [ ] Email report delivery
