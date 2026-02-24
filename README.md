@@ -9,33 +9,26 @@
 
 A comprehensive PowerShell module that audits your Microsoft 365 environment against **all 140 CIS Microsoft 365 Foundations Benchmark v6.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
-## What's New in v3.0.5
+## What's New in v4.0.0
+
+**v4.0.0 - Major Code Audit & Bug Fix Release**
+- **Critical Fix: XSS vulnerability** - All HTML report output now sanitized via `[System.Net.WebUtility]::HtmlEncode()`
+- **Critical Fix: 6.1.2 false failures (Issue #12)** - Now respects `DefaultAuditSet` so mailboxes using Microsoft's default audit actions correctly pass
+- **Critical Fix: 1.1.1 false positives** - No longer flags read-only roles (Global Reader, Directory Readers, etc.) as administrative accounts
+- **Critical Fix: Intune 4.1 & 4.2** - Now verify actual compliance policy values instead of just checking if objects exist
+- **Critical Fix: Password expiration (1.3.1)** - Now requires exactly `2147483647` (never expire) instead of accepting >365 days
+- **Critical Fix: 6.2.1 outbound spam** - Iterates all policies instead of treating array as single object
+- **Performance: O(n²) array growth eliminated** - Results collection uses `List<T>` instead of `+=`
+- **File-based audit logging** - Every check result now logged to timestamped `.log` file alongside reports
+- **Null safety** - Fixed null reference on missing Graph scopes, null check order, `.Count` on single objects (PS 5.1)
+- **Security hardened** - Removed `-Force -AllowClobber`, removed hardcoded ClientId, environment variable cleanup
+- **No more side effects on import** - Dependencies checked at connect time, not module import
+- **Sovereign cloud support** - SharePoint URL validation now accepts `.sharepoint.us`, `.sharepoint.de`, `.sharepoint.cn`
+- **Get-CISBenchmarkControl** fully populated with all 140 controls
+- **Teams connection non-fatal** - If Teams fails to connect, remaining 8 sections still run
 
 **v3.0.5 - Fix False Positive on onmicrosoft.com Domains (Issue #9)**
-- **DMARC check (2.1.10)** no longer falsely flags `*.onmicrosoft.com` domains - DMARC is managed by Microsoft
-- **SPF check (2.1.8)** and **DKIM check (2.1.9)** also skip Microsoft-managed onmicrosoft.com domains
-- Thanks to [heysurfer](https://github.com/heysurfer) for reporting
-
-**v3.0.3 - Device Code Authentication Fix**
-- **Device code auth now works for all services**: `-UseDeviceCode` now propagates to SharePoint Online (`-UseSystemBrowser $true`) and Teams (`-UseDeviceAuthentication`)
-- **Device code now works on PowerShell 7+**: Previously ignored on PS 7+, now works on both PS 5.1 and 7+
-- Thanks to Mateusz Jagiello for identifying and testing the fix
-
-**v3.0.0 - CIS Benchmark v6.0.0 Upgrade**
-
-- **12 New Controls Added** (140 total, up from 130):
-  - 1.3.9 - Shared bookings page restrictions
-  - 2.1.15 - Outbound anti-spam message limits
-  - 5.1.3.2 - Security group creation restrictions
-  - 5.1.4.1-6 - Device management controls (Entra join, LAPS, BitLocker)
-  - 5.2.3.7 - Email OTP authentication method
-  - 6.5.5 - Direct Send submission rejection
-  - 9.1.12 - Service principal workspace/pipeline restrictions
-- **2 Controls Removed** per CIS v6.0.0: 7.3.3 and 7.3.4 (custom script execution)
-- **MSOL Dependency Removed**: MSOnline module retired by Microsoft; migrated to Graph API
-- **Performance**: Cached redundant API calls (45 down to 7, 80% reduction)
-- **PowerShellNerd Branding**: Logo in HTML report header and floating action button
-- **Bug Fixes**: Fixed controls 2.1.6, 5.1.6.2, 5.2.3.4, 5.3.4, 5.3.5; SPO OAuth on PS 7+
+- DMARC, SPF, and DKIM checks skip `*.onmicrosoft.com` domains managed by Microsoft
 
 ## Features
 
@@ -49,72 +42,6 @@ A comprehensive PowerShell module that audits your Microsoft 365 environment aga
 - **Actionable Remediation** - Each failed check includes specific remediation steps
 - **PowerShell 5.1 & 7+ Compatible** - Works on Windows PowerShell and PowerShell Core
 - **Cached API Calls** - Minimized redundant Microsoft Graph and service calls
-
-## What Gets Checked
-
-The script performs comprehensive checks across **9 major sections**:
-
-### Section 1: Microsoft 365 Admin Center (15 controls)
-- Administrative account configurations and global admin count validation
-- Public group management and shared mailbox security
-- Password expiration policies
-- Calendar sharing, idle session, user-owned apps settings
-- **NEW**: Shared bookings page restrictions (1.3.9)
-
-### Section 2: Microsoft 365 Defender (20 controls)
-- Safe Links, Safe Attachments, and anti-phishing policies
-- Common attachment type filters and malware notifications
-- SPF, DKIM, and DMARC records
-- Connection filters and zero-hour auto purge
-- Priority account protection
-- **NEW**: Outbound anti-spam message limits (2.1.15)
-
-### Section 3: Microsoft Purview (4 controls)
-- Audit log search, DLP policies, sensitivity labels, communication compliance
-
-### Section 4: Microsoft Intune Admin Center (2 controls)
-- Device compliance policies and personal device enrollment restrictions
-
-### Section 5: Microsoft Entra Admin Center (45 controls)
-
-#### Identity & Access (5.1.x - 19 controls)
-- Cloud-only administrative accounts, emergency access, global admin count
-- App registration, tenant creation, admin center access restrictions
-- Guest user access, user consent, dynamic groups
-- **NEW**: Security group creation restrictions (5.1.3.2)
-- **NEW**: Device management - Entra join, device limits, admin roles, LAPS, BitLocker (5.1.4.1-6)
-
-#### Conditional Access (5.2.2.x - 12 controls)
-- MFA for admins and all users, legacy authentication blocking
-- Sign-in frequency, user/sign-in risk policies, managed devices
-
-#### Authentication Methods (5.2.3.x - 7 controls)
-- Authenticator MFA fatigue protection, banned passwords, MFA capable
-- Weak methods disabled, system-preferred MFA
-- **NEW**: Email OTP authentication method disabled (5.2.3.7)
-
-#### Password Reset & Identity Governance (6 controls)
-- Self-service password reset, PIM, access reviews, admin approval
-
-### Section 6: Exchange Admin Center (12 controls)
-- Organization and mailbox auditing, mail forwarding restrictions
-- Transport rules, external email tagging, add-in restrictions
-- Modern authentication, MailTips, OWA storage, SMTP AUTH
-- **NEW**: Direct Send submission rejection (6.5.5)
-
-### Section 7: SharePoint Admin Center (13 controls)
-- Modern authentication, B2B integration, sharing restrictions
-- Guest controls, link sharing, sync restrictions
-- *Note: Controls 7.3.3 and 7.3.4 removed in CIS v6.0.0*
-
-### Section 8: Microsoft Teams Admin Center (17 controls)
-- External sharing, domain restrictions, app permissions
-- Meeting policies, lobby, chat, presenter, recording settings
-
-### Section 9: Microsoft Fabric / Power BI (12 controls)
-- Guest access, external sharing, publish restrictions
-- Sensitivity labels, service principal controls
-- **NEW**: Service principal workspace/pipeline restrictions (9.1.12)
 
 ## Automation Coverage
 
@@ -133,77 +60,19 @@ The script performs comprehensive checks across **9 major sections**:
 
 ## Installation
 
-### Quick Start (Recommended)
-
 ```powershell
-# Step 1: Install the module
+# Install from PowerShell Gallery
 Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser
 
-# Step 2: Authenticate to Microsoft 365
-Connect-CISBenchmark
-
-# Step 3: Run compliance check (auto-detects tenant info!)
-Invoke-CISBenchmark
-
-# That's it! All prerequisites install automatically on first run.
+# Update to latest version
+Update-Module -Name CIS-M365-Benchmark
 ```
 
-### What Happens Behind the Scenes
+### Support This Project
 
-When you run the commands for the first time, the module automatically:
+If this toolkit has helped improve your security compliance, consider supporting its development:
 
-1. **On `Connect-CISBenchmark`:**
-   - Opens browser window for Microsoft 365 sign-in
-   - Authenticates to Microsoft Graph with required permissions
-   - Establishes secure session for compliance checks
-
-2. **On `Invoke-CISBenchmark`:**
-   - Auto-detects your tenant domain and SharePoint admin URL
-   - Detects missing prerequisite modules
-   - Installs them silently with progress feedback:
-     - Microsoft.Graph (v2.0+)
-     - ExchangeOnlineManagement
-     - Microsoft.Online.SharePoint.PowerShell
-     - MicrosoftTeams
-   - Proceeds with compliance checks
-
-### Alternative Authentication Methods
-
-```powershell
-# Use device code authentication (for remote sessions or MFA issues)
-Connect-CISBenchmark -UseDeviceCode
-
-# Then run the assessment
-Invoke-CISBenchmark
-```
-
-### Manual Parameters (Optional)
-
-If auto-detection doesn't work, you can still specify parameters manually:
-
-```powershell
-# Authenticate first
-Connect-CISBenchmark
-
-# Run with manual parameters
-Invoke-CISBenchmark -TenantDomain "your-tenant.onmicrosoft.com" `
-                    -SharePointAdminUrl "https://your-tenant-admin.sharepoint.com"
-```
-
-### Alternative: Clone from GitHub
-
-```powershell
-# Clone the repository
-git clone https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark.git
-cd CIS-Microsoft-365-Foundations-Benchmark
-
-# Import the module
-Import-Module .\CIS-M365-Benchmark\CIS-M365-Benchmark.psd1
-
-# Authenticate and run
-Connect-CISBenchmark
-Invoke-CISBenchmark
-```
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support%20This%20Project-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
 
 ## Prerequisites
 
@@ -217,21 +86,6 @@ The following modules are **automatically installed** when you first use the mod
 | `ExchangeOnlineManagement` | Exchange Online configuration checks |
 | `Microsoft.Online.SharePoint.PowerShell` | SharePoint Online tenant settings |
 | `MicrosoftTeams` | Teams meeting, messaging, and federation policies |
-
-No manual installation required!
-
-### Key Cmdlets Used
-
-| Cmdlet | Controls |
-|--------|----------|
-| `Get-MgIdentityConditionalAccessPolicy` | 5.2.2.x (Conditional Access) |
-| `Get-MgPolicyRoleManagementPolicyAssignment` | 5.3.4, 5.3.5 (PIM approval) |
-| `Get-MgReportAuthenticationMethodUserRegistrationDetail` | 5.2.3.4 (MFA registration) |
-| `Get-HostedOutboundSpamFilterPolicy` | 2.1.6 (Outbound spam notifications) |
-| `Get-SPOTenant` | 7.x (SharePoint settings) |
-| `Get-CsTeamsMeetingPolicy` | 8.x (Teams meeting policies) |
-| `Get-OrganizationConfig` | 6.x (Exchange org settings) |
-| `Get-MalwareFilterPolicy` | 2.1.x (Defender malware filters) |
 
 ### Required Permissions
 
@@ -261,160 +115,77 @@ Your account needs the following permissions:
 
 ## Usage
 
-### Module Commands
-
-After installing the module, you can use the following commands:
-
 ```powershell
-# Import the module (optional - auto-imports when you run commands)
+# Quick start - 3 steps
 Import-Module CIS-M365-Benchmark
-
-# See available commands
-Get-Command -Module CIS-M365-Benchmark
-
-# Display module information
-Get-CISBenchmarkInfo
-
-# Check which prerequisite modules are installed
-Test-CISBenchmarkPrerequisites
-
-# Get help on authentication
-Get-Help Connect-CISBenchmark -Full
-
-# Get help on running assessments
-Get-Help Invoke-CISBenchmark -Full
-```
-
-### Basic Usage
-
-```powershell
-# Step 1: Authenticate to Microsoft 365
 Connect-CISBenchmark
-
-# Step 2: Run all compliance checks (auto-detects tenant info)
 Invoke-CISBenchmark
-```
 
-### Advanced Usage
-
-```powershell
-# Authenticate first
-Connect-CISBenchmark
-
-# Check only L1 (baseline) controls
-Invoke-CISBenchmark -ProfileLevel "L1"
-
-# Check only L2 (enhanced security) controls
-Invoke-CISBenchmark -ProfileLevel "L2"
-
-# Custom output path
-Invoke-CISBenchmark -OutputPath "C:\CIS-Reports"
-
-# Run with verbose output
-Invoke-CISBenchmark -Verbose
-
-# Combine multiple options
-Invoke-CISBenchmark -ProfileLevel "L1" -OutputPath "C:\CIS-Reports" -Verbose
-```
-
-### Legacy Script Usage
-
-You can also run the script directly without installing as a module:
-
-```powershell
-.\CIS-M365-Compliance-Checker.ps1 `
+# Specify tenant manually
+Invoke-CISBenchmark `
     -TenantDomain "contoso.onmicrosoft.com" `
     -SharePointAdminUrl "https://contoso-admin.sharepoint.com"
+
+# Check only L1 or L2 controls
+Invoke-CISBenchmark -ProfileLevel "L1"
+Invoke-CISBenchmark -ProfileLevel "L2"
+
+# Custom output directory
+Invoke-CISBenchmark -OutputPath "C:\CIS-Reports"
+
+# Device code authentication (headless/remote sessions)
+Connect-CISBenchmark -UseDeviceCode
+Invoke-CISBenchmark
+
+# Full example with all parameters
+Invoke-CISBenchmark `
+    -TenantDomain "contoso.onmicrosoft.com" `
+    -SharePointAdminUrl "https://contoso-admin.sharepoint.com" `
+    -ProfileLevel "All" `
+    -OutputPath "C:\Security\CIS-Reports" `
+    -Verbose
+
+# Look up a specific control
+Get-CISBenchmarkControl -ControlNumber "5.2.2.1"
+
+# Check prerequisites and module versions
+Test-CISBenchmarkPrerequisites
+
+# Module info
+Get-CISBenchmarkInfo
 ```
 
 ## Output Reports
 
-The script generates two types of reports:
-
-### 1. HTML Report
+### HTML Report
 - **File**: `CIS-M365-Compliance-Report_YYYYMMDD_HHMMSS.html`
-- Professional dark-themed HTML report with PowerShellNerd branding
-- Pass (Green), Fail (Red), Manual (Yellow), Error (Orange)
-- Includes remediation steps for each failed control
-- Summary dashboard with compliance statistics and progress bars
-- L1/L2 profile breakdown
-- Filterable results table with search
-- Floating action buttons (PowerShellNerd, GitHub, Issues, Feedback, LinkedIn, Buy Me a Coffee)
+- Professional dark-themed report with summary dashboard, progress bars, and L1/L2 breakdown
+- Filterable results table with search, remediation steps for each failed control
 
-### 2. CSV Report
+### CSV Report
 - **File**: `CIS-M365-Compliance-Report_YYYYMMDD_HHMMSS.csv`
-- Comma-separated values for easy import into Excel
-- Includes all control details and results
-- Perfect for tracking over time or further analysis
+- Import into Excel for tracking over time or further analysis
 
-## Sample Output
-
-```
-================================================================
-  CIS Microsoft 365 Foundations Benchmark v6.0.0
-  Compliance Checker v3.0.5
-================================================================
-
-[2026-02-21 15:30:08] [Info] Checking required PowerShell modules...
-[2026-02-21 15:30:08] [Success] All required modules are installed
-[2026-02-21 15:30:08] [Info] Connecting to Microsoft 365 services...
-[2026-02-21 15:30:12] [Info] Auto-detected tenant: contoso.onmicrosoft.com
-[2026-02-21 15:30:12] [Info] Auto-detected SharePoint Admin URL: https://contoso-admin.sharepoint.com
-[2026-02-21 15:30:35] [Success] Connected to Microsoft Graph
-[2026-02-21 15:30:55] [Success] Connected to Exchange Online
-[2026-02-21 15:31:00] [Success] Connected to SharePoint Online
-[2026-02-21 15:31:20] [Success] Connected to Microsoft Teams
-
-[2026-02-21 15:31:26] [Info] Starting CIS compliance checks...
-
-================================================================
-  Compliance Check Complete
-================================================================
-
-Total Controls Checked: 140
-Passed: 58
-Failed: 30
-Manual Review Required: 48
-Errors: 4
-
-Automated Compliance Rate: 66%
-
-Reports saved to:
-  HTML: .\CIS-M365-Compliance-Report_20260221_153245.html
-  CSV:  .\CIS-M365-Compliance-Report_20260221_153245.csv
-```
+### Audit Log
+- **File**: `CIS-M365-Audit_YYYYMMDD_HHMMSS.log`
+- Timestamped log of every check result for compliance evidence
 
 ## Troubleshooting
 
-### Common Issues
-
 **Issue: "Connect-CISBenchmark is not recognized"**
-- **Solution**: Make sure you've installed the latest version:
-  ```powershell
-  Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser -Force
-  Import-Module CIS-M365-Benchmark -Force
-  ```
+- Install the latest version: `Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser -Force`
 
 **Issue: Authentication browser window doesn't open**
-- **Solution**: Use device code authentication instead:
-  ```powershell
-  Connect-CISBenchmark -UseDeviceCode
-  ```
-
-**Issue: "Tenant domain is empty" error**
-- **Solution**: Ensure you've authenticated first with `Connect-CISBenchmark`, or specify parameters manually.
+- Use device code authentication: `Connect-CISBenchmark -UseDeviceCode`
 
 **Issue: Multiple sign-in prompts**
-- **Solution**: This is normal. Each M365 service (Graph, Exchange, SharePoint, Teams) may prompt separately.
+- Normal. Each M365 service (Graph, Exchange, SharePoint, Teams) may prompt separately.
 
 **Issue: SPO authentication fails on PowerShell 7+**
-- **Solution**: The module automatically handles this by importing with `-UseWindowsPowerShell`. If issues persist, try running from Windows PowerShell 5.1.
+- The module handles this automatically. If issues persist, try Windows PowerShell 5.1.
 
 **Issue: PIM or Identity Governance errors**
-- **Solution**: Ensure PIM is licensed and configured. Controls 5.3.4/5.3.5 use `Get-MgPolicyRoleManagementPolicyAssignment` which requires Entra ID P2.
-
-**Issue: Permission denied errors**
-- **Solution**: Ensure your account has Global Reader or equivalent permissions for all M365 services.
+- Ensure PIM is licensed. Controls 5.3.4/5.3.5 require Entra ID P2.
 
 ## Security Considerations
 
@@ -432,12 +203,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
 
 ## References
 
@@ -458,7 +223,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - CIS (Center for Internet Security) for the comprehensive benchmark
 - Microsoft for providing Graph API and PowerShell modules
 - The Microsoft 365 security community
-- Thanks to ITEngineer-0815, M0nk3yOo, ozsaid, and Mateusz Jagiello for their contributions and issue reports
+- Thanks to ITEngineer-0815, M0nk3yOo, ozsaid, boscorelly, and Mateusz Jagiello for their contributions and issue reports
 
 ## Support
 
@@ -467,13 +232,7 @@ For issues, questions, or suggestions:
 - [Start a Discussion](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/discussions)
 - [PowerShellNerd](https://powershellnerd.com)
 
-## Support This Project
-
-If you find this tool helpful and want to support continued development:
-
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
-
-Your support helps maintain and improve this project!
 
 ---
 
