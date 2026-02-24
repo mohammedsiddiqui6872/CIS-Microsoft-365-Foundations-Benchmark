@@ -9,7 +9,15 @@
 
 A comprehensive PowerShell module that audits your Microsoft 365 environment against **all 140 CIS Microsoft 365 Foundations Benchmark v6.0.0 controls** and generates detailed HTML and CSV compliance reports.
 
-## What's New in v4.0.0
+## What's New in v4.1.0
+
+**v4.1.0 - Connection Reliability & Diagnostics Release (Issues #13, #14)**
+- **Fix: Intune 403 Forbidden errors (Issue #14)** - Added missing `DeviceManagementConfiguration.Read.All` and `DeviceManagementServiceConfig.Read.All` Graph API scopes for checks 4.1, 4.2
+- **Fix: 2.1.11 now reports missing file types (Issue #13)** - Instead of generic "Fail", shows which specific attachment types are missing per malware filter policy
+- **Fix: 5.2.3.4 permission error guidance** - Detects `AuditLog.Read.All` consent issues and provides admin consent remediation steps
+- **Fix: Exchange Online WAM errors** - Uses `-DisableWAM` for reliable authentication across all environments
+- **Fix: SharePoint Online auth loop** - Uses `-ModernAuth` for seamless browser-based authentication
+- **Fix: Teams 8.2.x federation errors** - Force-loads MicrosoftTeams ConfigAPI submodules to prevent "cmdlet not recognized" errors
 
 **v4.0.0 - Major Code Audit & Bug Fix Release**
 - **Critical Fix: XSS vulnerability** - All HTML report output now sanitized via `[System.Net.WebUtility]::HtmlEncode()`
@@ -103,6 +111,8 @@ Your account needs the following permissions:
 - `Group.Read.All`
 - `RoleManagement.Read.All`
 - `Reports.Read.All`
+- `DeviceManagementConfiguration.Read.All`
+- `DeviceManagementServiceConfig.Read.All`
 
 **Exchange Online:**
 - View-Only Organization Management or higher
