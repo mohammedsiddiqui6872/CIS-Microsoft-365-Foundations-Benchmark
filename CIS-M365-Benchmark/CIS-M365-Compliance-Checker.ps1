@@ -1,3 +1,5 @@
+#Requires -Version 5.1
+
 <#
 .SYNOPSIS
     CIS Microsoft 365 Foundations Benchmark v6.0.0 Compliance Checker
@@ -50,7 +52,7 @@ param(
 )
 
 # Global Variables
-$Script:Results = @()
+$Script:Results = [System.Collections.Generic.List[PSCustomObject]]::new()
 $Script:TotalControls = 0
 $Script:PassedControls = 0
 $Script:FailedControls = 0
@@ -58,6 +60,7 @@ $Script:ManualControls = 0
 $Script:ErrorControls = 0
 
 $Script:RequestedProfileLevel = $ProfileLevel
+$Script:LogFilePath = $null
 
 # Level-specific counters
 $Script:L1TotalControls = 0
@@ -89,6 +92,16 @@ function Write-Log {
     Write-Host "[$timestamp] " -NoNewline
     Write-Host "[$Level] " -ForegroundColor $color -NoNewline
     Write-Host $Message
+
+    # Write to log file if path is set
+    if ($Script:LogFilePath) {
+        try {
+            "[$timestamp] [$Level] $Message" | Out-File -FilePath $Script:LogFilePath -Append -Encoding utf8
+        }
+        catch {
+            # Do not recurse or fail if logging itself fails
+        }
+    }
 }
 
 function Add-Result {
@@ -140,14 +153,23 @@ function Add-Result {
         'Error' { $Script:ErrorControls++ }
     }
 
-    $Script:Results += [PSCustomObject]@{
+    $Script:Results.Add([PSCustomObject]@{
         ControlNumber = $ControlNumber
         ControlTitle = $ControlTitle
         ProfileLevel = $ProfileLevel
         Result = $Result
         Details = $Details
         Remediation = $Remediation
+    })
+
+    # Log each control result to audit file
+    $logLevel = switch ($Result) {
+        'Pass' { 'Success' }
+        'Fail' { 'Warning' }
+        'Error' { 'Error' }
+        default { 'Info' }
     }
+    Write-Log "[$ControlNumber] [$ProfileLevel] $Result - $Details" -Level $logLevel
 }
 
 function Test-ModuleInstalled {
@@ -157,6 +179,12 @@ function Test-ModuleInstalled {
         return $true
     }
     return $false
+}
+
+function Get-HtmlEncoded {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return "" }
+    return [System.Net.WebUtility]::HtmlEncode($Text)
 }
 
 function Connect-M365Services {
@@ -210,13 +238,21 @@ function Connect-M365Services {
         Write-Log "Connected to SharePoint Online" -Level Success
 
         # Connect to Microsoft Teams using the same account
+        # Teams connection is non-fatal - if it fails, Section 8 checks will report errors
+        # but the remaining 8 sections will still run successfully
         Write-Log "Connecting to Microsoft Teams..." -Level Info
-        if ($useDeviceAuth) {
-            Connect-MicrosoftTeams -TenantId $tenantId -UseDeviceAuthentication -ErrorAction Stop | Out-Null
-        } else {
-            Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
+        try {
+            if ($useDeviceAuth) {
+                Connect-MicrosoftTeams -TenantId $tenantId -UseDeviceAuthentication -ErrorAction Stop | Out-Null
+            } else {
+                Connect-MicrosoftTeams -TenantId $tenantId -ErrorAction Stop | Out-Null
+            }
+            Write-Log "Connected to Microsoft Teams" -Level Success
         }
-        Write-Log "Connected to Microsoft Teams" -Level Success
+        catch {
+            Write-Log "Warning: Could not connect to Microsoft Teams: $_" -Level Warning
+            Write-Log "Teams-related checks (Section 8) will report errors. All other checks will proceed." -Level Warning
+        }
 
         # MSOnline module has been retired (March 2025)
         # Per-user MFA check (5.1.2.1) now uses Microsoft Graph instead
@@ -241,19 +277,35 @@ function Test-M365AdminCenter {
     # 1.1.1 - Ensure Administrative accounts are cloud-only
     try {
         Write-Log "Checking 1.1.1 - Administrative accounts are cloud-only" -Level Info
-        $adminRoles = Get-MgDirectoryRole -All -ErrorAction Stop
+
+        # Read-only role template IDs to exclude - these are not administrative roles
+        # CIS requires only privileged (write/modify) admin accounts to be cloud-only
+        $readOnlyRoleTemplateIds = @(
+            "88d8e3e3-8f55-4a1e-953a-9b9898b8876b"  # Directory Readers
+            "f2ef992c-3afb-46b9-b7cf-a126ee74c451"  # Global Reader
+            "790c1fb9-7f7d-4f88-86a1-ef1f95c05c1b"  # Message Center Reader
+            "4a5d8f65-41da-4de4-8968-e035b65339cf"  # Reports Reader
+            "5d6b6bb7-de71-4623-b4af-96380a352509"  # Security Reader
+        )
+
+        $allRoles = Get-MgDirectoryRole -All -ErrorAction Stop
+        $adminRoles = $allRoles | Where-Object { $_.RoleTemplateId -notin $readOnlyRoleTemplateIds }
+
         $adminUsers = @()
         foreach ($role in $adminRoles) {
             $members = Get-MgDirectoryRoleMember -DirectoryRoleId $role.Id -ErrorAction Stop
             foreach ($member in $members) {
                 if ($member.AdditionalProperties.'@odata.type' -eq '#microsoft.graph.user') {
                     $user = Get-MgUser -UserId $member.Id -Property Id,UserPrincipalName,OnPremisesSyncEnabled -ErrorAction Stop
-                    if ($user.OnPremisesSyncEnabled) {
-                        $adminUsers += $user.UserPrincipalName
+                    if ($user.OnPremisesSyncEnabled -eq $true) {
+                        $adminUsers += "$($user.UserPrincipalName) ($($role.DisplayName))"
                     }
                 }
             }
         }
+
+        # Deduplicate in case a user has multiple admin roles
+        $adminUsers = @($adminUsers | Select-Object -Unique)
 
         if ($adminUsers.Count -eq 0) {
             Add-Result -ControlNumber "1.1.1" -ControlTitle "Ensure Administrative accounts are cloud-only" `
@@ -359,13 +411,15 @@ function Test-M365AdminCenter {
         # Check password policy via Graph API
         $defaultDomain = Get-MgDomain -ErrorAction Stop | Where-Object { $_.IsDefault -eq $true } | Select-Object -First 1
 
-        if ($defaultDomain.PasswordValidityPeriodInDays -eq 2147483647 -or $defaultDomain.PasswordValidityPeriodInDays -gt 365) {
+        # CIS requires passwords to be set to "never expire" which is exactly 2147483647
+        # Any other value (even large ones like 400 days) is NOT compliant
+        if ($defaultDomain.PasswordValidityPeriodInDays -eq 2147483647) {
             Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Password expiration set to $($defaultDomain.PasswordValidityPeriodInDays) days (never expire)"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Password expiration set to never expire (2147483647 days)"
         }
         else {
             Add-Result -ControlNumber "1.3.1" -ControlTitle "Ensure the 'Password expiration policy' is set to 'Set passwords to never expire'" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Password expires in $($defaultDomain.PasswordValidityPeriodInDays) days" `
+                       -ProfileLevel "L1" -Result "Fail" -Details "Password expires in $($defaultDomain.PasswordValidityPeriodInDays) days (must be set to never expire)" `
                        -Remediation "Update-MgDomain -DomainId $($defaultDomain.Id) -PasswordValidityPeriodInDays 2147483647"
         }
     }
@@ -410,16 +464,10 @@ function Test-M365AdminCenter {
                -Remediation "Disable external Sway sharing"
 
     # 1.3.9 - Ensure shared bookings pages are restricted to select users (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 1.3.9 - Shared bookings page restrictions" -Level Info
-        Add-Result -ControlNumber "1.3.9" -ControlTitle "Ensure shared bookings pages are restricted to select users" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Microsoft 365 Admin Center > Settings > Org settings > Bookings" `
-                   -Remediation "Restrict shared bookings pages to selected users in Org settings > Bookings"
-    }
-    catch {
-        Add-Result -ControlNumber "1.3.9" -ControlTitle "Ensure shared bookings pages are restricted to select users" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 1.3.9 - Shared bookings page restrictions" -Level Info
+    Add-Result -ControlNumber "1.3.9" -ControlTitle "Ensure shared bookings pages are restricted to select users" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Microsoft 365 Admin Center > Settings > Org settings > Bookings" `
+               -Remediation "Restrict shared bookings pages to selected users in Org settings > Bookings"
 }
 
 #endregion
@@ -432,8 +480,10 @@ function Test-M365Defender {
     # Pre-fetch shared data for this section
     $cachedMalwareFilterPolicy = $null
     $cachedHostedContentFilterPolicy = $null
+    $cachedAcceptedDomains = $null
     try { $cachedMalwareFilterPolicy = Get-MalwareFilterPolicy } catch { Write-Log "Warning: Could not retrieve MalwareFilterPolicy. Related checks will report errors." -Level Warning }
     try { $cachedHostedContentFilterPolicy = Get-HostedContentFilterPolicy } catch { Write-Log "Warning: Could not retrieve HostedContentFilterPolicy. Related checks will report errors." -Level Warning }
+    try { $cachedAcceptedDomains = Get-AcceptedDomain } catch { Write-Log "Warning: Could not retrieve AcceptedDomain. Related checks will report errors." -Level Warning }
 
     # 2.1.1 - Ensure Safe Links for Office Applications is Enabled
     try {
@@ -620,7 +670,7 @@ function Test-M365Defender {
     # 2.1.8 - Ensure that SPF records are published for all Exchange Domains
     try {
         Write-Log "Checking 2.1.8 - SPF records" -Level Info
-        $acceptedDomains = Get-AcceptedDomain
+        $acceptedDomains = $cachedAcceptedDomains
         $missingSpf = @()
 
         foreach ($domain in $acceptedDomains) {
@@ -684,7 +734,7 @@ function Test-M365Defender {
     # 2.1.10 - Ensure DMARC Records for all Exchange Online domains are published
     try {
         Write-Log "Checking 2.1.10 - DMARC records" -Level Info
-        $acceptedDomains = Get-AcceptedDomain
+        $acceptedDomains = $cachedAcceptedDomains
         $missingDmarc = @()
 
         foreach ($domain in $acceptedDomains) {
@@ -807,8 +857,8 @@ function Test-M365Defender {
         $totalAllowedSenders = 0
 
         foreach ($policy in $contentFilters) {
-            $domainCount = if ($policy.AllowedSenderDomains) { $policy.AllowedSenderDomains.Count } else { 0 }
-            $senderCount = if ($policy.AllowedSenders) { $policy.AllowedSenders.Count } else { 0 }
+            $domainCount = if ($policy.AllowedSenderDomains) { @($policy.AllowedSenderDomains).Count } else { 0 }
+            $senderCount = if ($policy.AllowedSenders) { @($policy.AllowedSenders).Count } else { 0 }
 
             if ($domainCount -gt 0 -or $senderCount -gt 0) {
                 $totalAllowedDomains += $domainCount
@@ -882,16 +932,10 @@ function Test-M365Defender {
     }
 
     # 2.1.15 - Ensure outbound anti-spam message limits are in place (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 2.1.15 - Outbound anti-spam message limits" -Level Info
-        Add-Result -ControlNumber "2.1.15" -ControlTitle "Ensure outbound anti-spam message limits are in place" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Microsoft Defender Portal > Policies > Anti-spam > Outbound policy" `
-                   -Remediation "Configure outbound message limits in Anti-spam outbound policy to restrict bulk sending"
-    }
-    catch {
-        Add-Result -ControlNumber "2.1.15" -ControlTitle "Ensure outbound anti-spam message limits are in place" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 2.1.15 - Outbound anti-spam message limits" -Level Info
+    Add-Result -ControlNumber "2.1.15" -ControlTitle "Ensure outbound anti-spam message limits are in place" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Microsoft Defender Portal > Policies > Anti-spam > Outbound policy" `
+               -Remediation "Configure outbound message limits in Anti-spam outbound policy to restrict bulk sending"
 }
 
 #endregion
@@ -1003,51 +1047,101 @@ function Test-Intune {
     # 4.1 - Ensure devices without a compliance policy are marked 'not compliant'
     try {
         Write-Log "Checking 4.1 - Non-compliant device marking" -Level Info
-        $complianceSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicySettingStateSummaries"
+        # Check the actual compliance policy setting that controls what happens to devices without a policy
+        # The setting "markDevicesWithNoCompliancePolicyAsCompliant" must be set to "nonCompliant"
+        $deviceManagementSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/settings" -ErrorAction Stop
 
-        # Check compliance policy settings
-        $deviceManagementSettings = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement"
+        # The key setting: devices with no compliance policy should be marked as "nonCompliant"
+        $markAsNonCompliant = $false
+        if ($deviceManagementSettings.deviceComplianceCheckinThresholdDays -or $deviceManagementSettings -is [hashtable]) {
+            # Check the secureByDefault property - when true, devices without policy are non-compliant
+            if ($deviceManagementSettings.secureByDefault -eq $true) {
+                $markAsNonCompliant = $true
+            }
+        }
 
-        if ($deviceManagementSettings.intuneAccountId) {
-            # Intune is configured, check compliance settings
-            Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
-                       -ProfileLevel "L2" -Result "Pass" -Details "Intune compliance policies are configured"
+        if (-not $markAsNonCompliant) {
+            # Fallback: check via the compliance policy setting state summaries for the specific setting
+            try {
+                $complianceDefaults = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies" -ErrorAction Stop
+                $hasCompliancePolicies = @($complianceDefaults.value).Count -gt 0
+
+                if ($hasCompliancePolicies) {
+                    # Policies exist but we cannot confirm the default marking behavior via API
+                    Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                               -ProfileLevel "L2" -Result "Manual" `
+                               -Details "Compliance policies exist ($(@($complianceDefaults.value).Count) found) but the default device compliance setting cannot be fully verified via API. Verify manually that 'Mark devices with no compliance policy assigned as' is set to 'Not compliant'." `
+                               -Remediation "Intune Admin Center > Devices > Compliance policies > Compliance policy settings > Set 'Mark devices with no compliance policy assigned as' to 'Not compliant'"
+                }
+                else {
+                    Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                               -ProfileLevel "L2" -Result "Fail" -Details "No compliance policies found in Intune" `
+                               -Remediation "Create compliance policies and set 'Mark devices with no compliance policy assigned as' to 'Not compliant' in Intune > Devices > Compliance policies > Compliance policy settings"
+                }
+            }
+            catch {
+                Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
+                           -ProfileLevel "L2" -Result "Manual" -Details "Unable to fully verify compliance policy default setting via API. Verify manually." `
+                           -Remediation "Intune Admin Center > Devices > Compliance policies > Compliance policy settings > Verify 'Mark devices with no compliance policy assigned as' is set to 'Not compliant'"
+            }
         }
         else {
             Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
-                       -ProfileLevel "L2" -Result "Fail" -Details "Intune not fully configured" `
-                       -Remediation "Configure Intune compliance policy settings to mark non-compliant devices"
+                       -ProfileLevel "L2" -Result "Pass" -Details "Devices without a compliance policy are marked as not compliant (secureByDefault enabled)"
         }
     }
     catch {
         Add-Result -ControlNumber "4.1" -ControlTitle "Ensure devices without a compliance policy are marked 'not compliant'" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check Intune settings via Graph API. Verify manually." `
-                   -Remediation "Check Intune > Devices > Compliance policies > Compliance policy settings"
+                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check Intune compliance policy settings via Graph API: $_. Verify manually." `
+                   -Remediation "Intune Admin Center > Devices > Compliance policies > Compliance policy settings > Verify 'Mark devices with no compliance policy assigned as' is set to 'Not compliant'"
     }
 
     # 4.2 - Ensure device enrollment for personally owned devices is blocked by default
     try {
         Write-Log "Checking 4.2 - Personal device enrollment restrictions" -Level Info
-        $enrollmentRestrictions = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations"
+        $enrollmentRestrictions = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/beta/deviceManagement/deviceEnrollmentConfigurations" -ErrorAction Stop
 
-        $restrictionPolicies = $enrollmentRestrictions.value | Where-Object {
+        $restrictionPolicies = @($enrollmentRestrictions.value | Where-Object {
             $_.'@odata.type' -eq '#microsoft.graph.deviceEnrollmentPlatformRestrictionsConfiguration'
-        }
+        })
 
-        if ($restrictionPolicies) {
-            Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
-                       -ProfileLevel "L2" -Result "Pass" -Details "Enrollment restriction policies found: $($restrictionPolicies.Count)"
+        if ($restrictionPolicies.Count -gt 0) {
+            # Check if personal devices are actually blocked in the restriction policies
+            $personalBlocked = $true
+            $platformDetails = @()
+
+            foreach ($policy in $restrictionPolicies) {
+                # Check each platform's personalDeviceEnrollmentBlocked setting
+                $platforms = @('iosRestriction', 'androidRestriction', 'windowsRestriction', 'macOSRestriction', 'androidForWorkRestriction')
+                foreach ($platform in $platforms) {
+                    $restriction = $policy.$platform
+                    if ($restriction -and $restriction.personalDeviceEnrollmentBlocked -eq $false) {
+                        $personalBlocked = $false
+                        $platformDetails += "$platform allows personal devices"
+                    }
+                }
+            }
+
+            if ($personalBlocked) {
+                Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
+                           -ProfileLevel "L2" -Result "Pass" -Details "Personal device enrollment is blocked across all platforms ($($restrictionPolicies.Count) restriction policies)"
+            }
+            else {
+                Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
+                           -ProfileLevel "L2" -Result "Fail" -Details "Personal device enrollment not blocked: $($platformDetails -join '; ')" `
+                           -Remediation "Intune Admin Center > Devices > Enrollment restrictions > Edit default platform restriction > Block personally owned devices for all platforms"
+            }
         }
         else {
             Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
                        -ProfileLevel "L2" -Result "Fail" -Details "No enrollment restriction policies configured" `
-                       -Remediation "Configure enrollment restrictions to block personally owned devices"
+                       -Remediation "Configure enrollment restrictions to block personally owned devices in Intune > Devices > Enrollment restrictions"
         }
     }
     catch {
         Add-Result -ControlNumber "4.2" -ControlTitle "Ensure device enrollment for personally owned devices is blocked by default" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check enrollment restrictions. Verify manually." `
-                   -Remediation "Check Intune > Devices > Enrollment restrictions"
+                   -ProfileLevel "L2" -Result "Manual" -Details "Unable to check enrollment restrictions: $_. Verify manually." `
+                   -Remediation "Intune Admin Center > Devices > Enrollment restrictions > Verify personally owned devices are blocked"
     }
 }
 
@@ -1193,88 +1287,46 @@ function Test-EntraID {
     }
 
     # 5.1.3.2 - Ensure users cannot create security groups (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.3.2 - Users cannot create security groups" -Level Info
-        Add-Result -ControlNumber "5.1.3.2" -ControlTitle "Ensure users cannot create security groups" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Groups > General > Security groups" `
-                   -Remediation "Restrict ability to create security groups to admins only in Entra Admin Center > Groups > General"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.3.2" -ControlTitle "Ensure users cannot create security groups" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.3.2 - Users cannot create security groups" -Level Info
+    Add-Result -ControlNumber "5.1.3.2" -ControlTitle "Ensure users cannot create security groups" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Groups > General > Security groups" `
+               -Remediation "Restrict ability to create security groups to admins only in Entra Admin Center > Groups > General"
 
     # 5.1.4.1 - Ensure the ability to join devices to Entra is restricted (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.1 - Device join restriction" -Level Info
-        Add-Result -ControlNumber "5.1.4.1" -ControlTitle "Ensure the ability to join devices to Entra is restricted" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings" `
-                   -Remediation "Set 'Users may join devices to Microsoft Entra' to 'Selected' or 'None' in Entra Admin Center > Devices > Device settings"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.1" -ControlTitle "Ensure the ability to join devices to Entra is restricted" `
-                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.1 - Device join restriction" -Level Info
+    Add-Result -ControlNumber "5.1.4.1" -ControlTitle "Ensure the ability to join devices to Entra is restricted" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings" `
+               -Remediation "Set 'Users may join devices to Microsoft Entra' to 'Selected' or 'None' in Entra Admin Center > Devices > Device settings"
 
     # 5.1.4.2 - Ensure the maximum number of devices per user is limited (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.2 - Max devices per user limited" -Level Info
-        Add-Result -ControlNumber "5.1.4.2" -ControlTitle "Ensure the maximum number of devices per user is limited" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings" `
-                   -Remediation "Set the maximum number of devices per user to an appropriate limit in Entra Admin Center > Devices > Device settings"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.2" -ControlTitle "Ensure the maximum number of devices per user is limited" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.2 - Max devices per user limited" -Level Info
+    Add-Result -ControlNumber "5.1.4.2" -ControlTitle "Ensure the maximum number of devices per user is limited" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings" `
+               -Remediation "Set the maximum number of devices per user to an appropriate limit in Entra Admin Center > Devices > Device settings"
 
     # 5.1.4.3 - Ensure the GA role is not added as a local administrator during Entra join (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.3 - GA not local admin on Entra join" -Level Info
-        Add-Result -ControlNumber "5.1.4.3" -ControlTitle "Ensure the GA role is not added as a local administrator during Entra join" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Local admin settings" `
-                   -Remediation "Disable Global Administrator as local admin during Entra join in Device settings > Local admin settings"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.3" -ControlTitle "Ensure the GA role is not added as a local administrator during Entra join" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.3 - GA not local admin on Entra join" -Level Info
+    Add-Result -ControlNumber "5.1.4.3" -ControlTitle "Ensure the GA role is not added as a local administrator during Entra join" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Local admin settings" `
+               -Remediation "Disable Global Administrator as local admin during Entra join in Device settings > Local admin settings"
 
     # 5.1.4.4 - Ensure local administrator assignment is limited during Entra join (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.4 - Local admin assignment limited" -Level Info
-        Add-Result -ControlNumber "5.1.4.4" -ControlTitle "Ensure local administrator assignment is limited during Entra join" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Local admin settings" `
-                   -Remediation "Limit local administrator assignment to specific roles during Entra join"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.4" -ControlTitle "Ensure local administrator assignment is limited during Entra join" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.4 - Local admin assignment limited" -Level Info
+    Add-Result -ControlNumber "5.1.4.4" -ControlTitle "Ensure local administrator assignment is limited during Entra join" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Local admin settings" `
+               -Remediation "Limit local administrator assignment to specific roles during Entra join"
 
     # 5.1.4.5 - Ensure Local Administrator Password Solution is enabled (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.5 - LAPS enabled" -Level Info
-        Add-Result -ControlNumber "5.1.4.5" -ControlTitle "Ensure Local Administrator Password Solution is enabled" `
-                   -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Enable Microsoft Entra Local Administrator Password Solution (LAPS)" `
-                   -Remediation "Enable Microsoft Entra Local Administrator Password Solution (LAPS) in Entra Admin Center > Devices > Device settings"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.5" -ControlTitle "Ensure Local Administrator Password Solution is enabled" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.5 - LAPS enabled" -Level Info
+    Add-Result -ControlNumber "5.1.4.5" -ControlTitle "Ensure Local Administrator Password Solution is enabled" `
+               -ProfileLevel "L1" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Enable Microsoft Entra Local Administrator Password Solution (LAPS)" `
+               -Remediation "Enable Microsoft Entra Local Administrator Password Solution (LAPS) in Entra Admin Center > Devices > Device settings"
 
     # 5.1.4.6 - Ensure users are restricted from recovering BitLocker keys (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.1.4.6 - BitLocker key recovery restricted" -Level Info
-        Add-Result -ControlNumber "5.1.4.6" -ControlTitle "Ensure users are restricted from recovering BitLocker keys" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Restrict users from recovering BitLocker keys" `
-                   -Remediation "Set 'Restrict users from recovering the BitLocker key(s) for their owned devices' to 'Yes' in Entra Admin Center > Devices > Device settings"
-    }
-    catch {
-        Add-Result -ControlNumber "5.1.4.6" -ControlTitle "Ensure users are restricted from recovering BitLocker keys" `
-                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.1.4.6 - BitLocker key recovery restricted" -Level Info
+    Add-Result -ControlNumber "5.1.4.6" -ControlTitle "Ensure users are restricted from recovering BitLocker keys" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra Admin Center > Devices > Device settings > Restrict users from recovering BitLocker keys" `
+               -Remediation "Set 'Restrict users from recovering the BitLocker key(s) for their owned devices' to 'Yes' in Entra Admin Center > Devices > Device settings"
 
     # 5.1.5.1 - Ensure user consent to apps accessing company data on their behalf is not allowed
     try {
@@ -1898,31 +1950,31 @@ function Test-EntraID {
 
         # Access nested hashtable properties correctly - try multiple access methods
         $numberMatching = $null
-        if ($featureSettings) {
-            if ($featureSettings['numberMatchingRequiredState']) {
+        if ($null -ne $featureSettings) {
+            if ($null -ne $featureSettings['numberMatchingRequiredState']) {
                 $numberMatching = $featureSettings['numberMatchingRequiredState']['state']
             }
-            elseif ($featureSettings.numberMatchingRequiredState) {
+            elseif ($null -ne $featureSettings.numberMatchingRequiredState) {
                 $numberMatching = $featureSettings.numberMatchingRequiredState.state
             }
         }
 
         $additionalContext = $null
-        if ($featureSettings) {
-            if ($featureSettings['displayAppInformationRequiredState']) {
+        if ($null -ne $featureSettings) {
+            if ($null -ne $featureSettings['displayAppInformationRequiredState']) {
                 $additionalContext = $featureSettings['displayAppInformationRequiredState']['state']
             }
-            elseif ($featureSettings.displayAppInformationRequiredState) {
+            elseif ($null -ne $featureSettings.displayAppInformationRequiredState) {
                 $additionalContext = $featureSettings.displayAppInformationRequiredState.state
             }
         }
 
         $locationContext = $null
-        if ($featureSettings) {
-            if ($featureSettings['displayLocationInformationRequiredState']) {
+        if ($null -ne $featureSettings) {
+            if ($null -ne $featureSettings['displayLocationInformationRequiredState']) {
                 $locationContext = $featureSettings['displayLocationInformationRequiredState']['state']
             }
-            elseif ($featureSettings.displayLocationInformationRequiredState) {
+            elseif ($null -ne $featureSettings.displayLocationInformationRequiredState) {
                 $locationContext = $featureSettings.displayLocationInformationRequiredState.state
             }
         }
@@ -1942,7 +1994,7 @@ function Test-EntraID {
         $locationContextCompliant = ($locationContext -eq "enabled" -or $locationContext -eq "default")
 
         # CIS 5.2.3.1 requires all three: number matching, app info, and location info
-        if ($numberMatchingCompliant -and $additionalContextCompliant -and $locationContextCompliant) {
+        if ($numberMatchingCompliant -eq $true -and $additionalContextCompliant -eq $true -and $locationContextCompliant -eq $true) {
             Add-Result -ControlNumber "5.2.3.1" -ControlTitle "Ensure Microsoft Authenticator is configured to protect against MFA fatigue" `
                        -ProfileLevel "L1" -Result "Pass" -Details "Number matching: $numberMatching, App context: $additionalContext, Location: $locationContext"
         }
@@ -2097,16 +2149,10 @@ function Test-EntraID {
     }
 
     # 5.2.3.7 - Ensure the email OTP authentication method is disabled (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 5.2.3.7 - Email OTP authentication method" -Level Info
-        Add-Result -ControlNumber "5.2.3.7" -ControlTitle "Ensure the email OTP authentication method is disabled" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra ID > Protection > Authentication methods > Policies > Email OTP" `
-                   -Remediation "Navigate to Entra ID > Protection > Authentication methods > Policies and disable the Email OTP method"
-    }
-    catch {
-        Add-Result -ControlNumber "5.2.3.7" -ControlTitle "Ensure the email OTP authentication method is disabled" `
-                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 5.2.3.7 - Email OTP authentication method" -Level Info
+    Add-Result -ControlNumber "5.2.3.7" -ControlTitle "Ensure the email OTP authentication method is disabled" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Check Entra ID > Protection > Authentication methods > Policies > Email OTP" `
+               -Remediation "Navigate to Entra ID > Protection > Authentication methods > Policies and disable the Email OTP method"
 
     # Password Reset
 
@@ -2277,28 +2323,35 @@ function Test-ExchangeOnline {
         if ($null -eq $cachedOrgConfig) { throw "OrganizationConfig data unavailable" }
         $orgConfig = $cachedOrgConfig
 
-        # Required audit actions per CIS Benchmark
+        # Required audit actions per CIS Benchmark v6.0.0
         $requiredOwnerActions = @("Create", "HardDelete", "MailboxLogin", "Move", "MoveToDeletedItems", "SoftDelete", "Update")
         $requiredDelegateActions = @("Create", "HardDelete", "Move", "MoveToDeletedItems", "SendAs", "SendOnBehalf", "SoftDelete", "Update")
         $requiredAdminActions = @("Copy", "Create", "HardDelete", "Move", "MoveToDeletedItems", "SendAs", "SendOnBehalf", "SoftDelete", "Update")
 
         # Sample mailboxes to verify audit actions
-        # Increased sample size from 5 to 50 for better coverage in large tenants
-        # Note: For tenants with 1000+ mailboxes, this provides ~5% sample rate
-        # For very large tenants (10,000+), consider periodic full audits via separate script
         $sampleSize = 50
-        $mailboxes = Get-Mailbox -ResultSize $sampleSize | Select-Object UserPrincipalName, AuditEnabled, AuditOwner, AuditDelegate, AuditAdmin
+        $mailboxes = Get-Mailbox -ResultSize $sampleSize | Select-Object UserPrincipalName, AuditEnabled, AuditOwner, AuditDelegate, AuditAdmin, DefaultAuditSet
 
         $compliantMailboxes = 0
         $nonCompliantDetails = @()
 
         foreach ($mbx in $mailboxes) {
             if ($mbx.AuditEnabled -eq $true) {
-                $ownerMissing = $requiredOwnerActions | Where-Object { $mbx.AuditOwner -notcontains $_ }
-                $delegateMissing = $requiredDelegateActions | Where-Object { $mbx.AuditDelegate -notcontains $_ }
-                $adminMissing = $requiredAdminActions | Where-Object { $mbx.AuditAdmin -notcontains $_ }
+                # DefaultAuditSet indicates which sign-in types use Microsoft's default audit actions.
+                # Microsoft's defaults meet or exceed CIS requirements, so if a type is in DefaultAuditSet,
+                # it is compliant even if AuditOwner/AuditDelegate/AuditAdmin properties appear empty.
+                # See: https://learn.microsoft.com/en-us/purview/audit-mailboxes
+                $defaultSet = @($mbx.DefaultAuditSet)
+                $usingOwnerDefaults = $defaultSet -contains "Owner"
+                $usingDelegateDefaults = $defaultSet -contains "Delegate"
+                $usingAdminDefaults = $defaultSet -contains "Admin"
 
-                if (-not $ownerMissing -and -not $delegateMissing -and -not $adminMissing) {
+                # Only check specific actions when NOT using defaults for that sign-in type
+                $ownerMissing = if ($usingOwnerDefaults) { @() } else { @($requiredOwnerActions | Where-Object { $mbx.AuditOwner -notcontains $_ }) }
+                $delegateMissing = if ($usingDelegateDefaults) { @() } else { @($requiredDelegateActions | Where-Object { $mbx.AuditDelegate -notcontains $_ }) }
+                $adminMissing = if ($usingAdminDefaults) { @() } else { @($requiredAdminActions | Where-Object { $mbx.AuditAdmin -notcontains $_ }) }
+
+                if ($ownerMissing.Count -eq 0 -and $delegateMissing.Count -eq 0 -and $adminMissing.Count -eq 0) {
                     $compliantMailboxes++
                 }
                 else {
@@ -2310,9 +2363,10 @@ function Test-ExchangeOnline {
             }
         }
 
-        if ($orgConfig.AuditDisabled -eq $false -and $compliantMailboxes -eq $mailboxes.Count) {
+        $mailboxCount = @($mailboxes).Count
+        if ($orgConfig.AuditDisabled -eq $false -and $compliantMailboxes -eq $mailboxCount) {
             Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Mailbox auditing enabled org-wide with proper default actions (sampled $($mailboxes.Count) of $sampleSize requested mailboxes)"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Mailbox auditing enabled org-wide with proper audit actions (sampled $mailboxCount of $sampleSize requested mailboxes)"
         }
         elseif ($orgConfig.AuditDisabled -eq $true) {
             Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
@@ -2323,11 +2377,11 @@ function Test-ExchangeOnline {
             # Show up to 5 examples of non-compliant mailboxes
             $exampleCount = [Math]::Min(5, $nonCompliantDetails.Count)
             $detailsStr = $nonCompliantDetails[0..($exampleCount-1)] -join "; "
-            $complianceRate = [Math]::Round(($compliantMailboxes / $mailboxes.Count) * 100, 1)
+            $complianceRate = if ($mailboxCount -gt 0) { [Math]::Round(($compliantMailboxes / $mailboxCount) * 100, 1) } else { 0 }
 
             Add-Result -ControlNumber "6.1.2" -ControlTitle "Ensure mailbox audit actions are configured" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "$($nonCompliantDetails.Count) of $($mailboxes.Count) sampled mailboxes ($complianceRate% compliant) missing required audit actions. Examples: $detailsStr" `
-                       -Remediation "Ensure default mailbox auditing is enabled and not overridden. Check: Get-Mailbox -ResultSize Unlimited | Where-Object {`$_.AuditEnabled -eq `$false}"
+                       -ProfileLevel "L1" -Result "Fail" -Details "$($nonCompliantDetails.Count) of $mailboxCount sampled mailboxes ($complianceRate% compliant) missing required audit actions. Examples: $detailsStr" `
+                       -Remediation "Ensure default mailbox auditing is enabled and not overridden. Run: Get-Mailbox <user> | Select DefaultAuditSet to check if defaults are in use. To restore defaults: Set-Mailbox <user> -DefaultAuditSet Admin,Delegate,Owner"
         }
     }
     catch {
@@ -2346,7 +2400,7 @@ function Test-ExchangeOnline {
                                Get-MailboxAuditBypassAssociation |
                                Where-Object { $_.AuditBypassEnabled -eq $true }
 
-            if ($bypassMailboxes.Count -eq 0 -or $null -eq $bypassMailboxes) {
+            if ($null -eq $bypassMailboxes -or @($bypassMailboxes).Count -eq 0) {
                 Add-Result -ControlNumber "6.1.3" -ControlTitle "Ensure 'AuditBypassEnabled' is not enabled on mailboxes" `
                            -ProfileLevel "L1" -Result "Pass" -Details "No mailboxes have audit bypass enabled"
             }
@@ -2372,16 +2426,23 @@ function Test-ExchangeOnline {
     # 6.2.1 - Ensure all forms of mail forwarding are blocked and/or disabled
     try {
         Write-Log "Checking 6.2.1 - Mail forwarding blocked" -Level Info
-        $outboundSpamPolicy = Get-HostedOutboundSpamFilterPolicy
+        $outboundSpamPolicies = @(Get-HostedOutboundSpamFilterPolicy)
+        $nonCompliantPolicies = @()
 
-        if ($outboundSpamPolicy.AutoForwardingMode -eq "Off") {
+        foreach ($policy in $outboundSpamPolicies) {
+            if ($policy.AutoForwardingMode -ne "Off") {
+                $nonCompliantPolicies += "$($policy.Name): AutoForwardingMode=$($policy.AutoForwardingMode)"
+            }
+        }
+
+        if ($nonCompliantPolicies.Count -eq 0) {
             Add-Result -ControlNumber "6.2.1" -ControlTitle "Ensure all forms of mail forwarding are blocked and/or disabled" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "Auto-forwarding is disabled"
+                       -ProfileLevel "L1" -Result "Pass" -Details "Auto-forwarding is disabled in all $($outboundSpamPolicies.Count) outbound spam policies"
         }
         else {
             Add-Result -ControlNumber "6.2.1" -ControlTitle "Ensure all forms of mail forwarding are blocked and/or disabled" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Auto-forwarding mode: $($outboundSpamPolicy.AutoForwardingMode)" `
-                       -Remediation "Set-HostedOutboundSpamFilterPolicy -Identity Default -AutoForwardingMode Off"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Auto-forwarding not disabled in: $($nonCompliantPolicies -join '; ')" `
+                       -Remediation "Set-HostedOutboundSpamFilterPolicy -Identity <PolicyName> -AutoForwardingMode Off for each non-compliant policy"
         }
     }
     catch {
@@ -2549,16 +2610,10 @@ function Test-ExchangeOnline {
                    -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
     }
     # 6.5.5 - Ensure Direct Send submissions are rejected (NEW in v6.0.0)
-    try {
-        Write-Log "Checking 6.5.5 - Direct Send submissions rejected" -Level Info
-        Add-Result -ControlNumber "6.5.5" -ControlTitle "Ensure Direct Send submissions are rejected" `
-                   -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Verify that Direct Send submissions are configured to be rejected in Exchange Online transport rules" `
-                   -Remediation "Configure Exchange Online transport rules to reject Direct Send submissions"
-    }
-    catch {
-        Add-Result -ControlNumber "6.5.5" -ControlTitle "Ensure Direct Send submissions are rejected" `
-                   -ProfileLevel "L2" -Result "Error" -Details "Error: $_"
-    }
+    Write-Log "Checking 6.5.5 - Direct Send submissions rejected" -Level Info
+    Add-Result -ControlNumber "6.5.5" -ControlTitle "Ensure Direct Send submissions are rejected" `
+               -ProfileLevel "L2" -Result "Manual" -Details "Manual verification required. Verify that Direct Send submissions are configured to be rejected in Exchange Online transport rules" `
+               -Remediation "Configure Exchange Online transport rules to reject Direct Send submissions"
 }
 
 #endregion
@@ -3355,6 +3410,12 @@ function Export-HtmlReport {
     $currentUserAccount = if ($mgContext.Account) { $mgContext.Account } else { "Unknown User" }
     $reportDate = Get-Date -Format "MMMM dd, yyyy HH:mm:ss"
 
+    # HTML-encode all dynamic values to prevent XSS
+    $safeTenantDomain = Get-HtmlEncoded $TenantDomain
+    $safeTenantId = Get-HtmlEncoded $currentTenantId
+    $safeUserAccount = Get-HtmlEncoded $currentUserAccount
+    $safeReportDate = Get-HtmlEncoded $reportDate
+
     $passRate = if ($Script:TotalControls -gt 0) {
         [math]::Round(($Script:PassedControls / ($Script:TotalControls - $Script:ManualControls)) * 100, 2)
     } else { 0 }
@@ -3423,20 +3484,31 @@ function Export-HtmlReport {
             cursor: pointer;
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            padding: 4px 8px;
-            border-radius: 5px;
-            transition: background-color 0.3s ease;
+            gap: 10px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            background: rgba(255, 255, 255, 0.06);
+            transition: all 0.25s ease;
         }
         .tenant-info:hover {
-            background-color: rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.25);
         }
         .expand-icon {
-            font-size: 0.8em;
-            transition: transform 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+            background: rgba(255, 255, 255, 0.1);
+            font-size: 0.55em;
+            transition: all 0.3s ease;
         }
         .expand-icon.expanded {
             transform: rotate(180deg);
+            background: rgba(255, 255, 255, 0.2);
         }
         .header-details-box {
             display: none;
@@ -3654,25 +3726,25 @@ function Export-HtmlReport {
             </div>
             <div class="header-right">
                 <div class="tenant-info" id="tenantInfo" onclick="toggleHeaderDetails()">
-                    <span class="subtitle">$TenantDomain</span>
-                    <span class="expand-icon" id="expandIcon">&#9660;</span>
+                    <span class="subtitle">$safeTenantDomain</span>
+                    <span class="expand-icon" id="expandIcon"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 3.5L5 6.5L8 3.5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 </div>
                 <div class="header-details-box" id="headerDetailsBox">
                     <div class="detail-item">
                         <div class="detail-label">Tenant</div>
-                        <div class="detail-value">$TenantDomain</div>
+                        <div class="detail-value">$safeTenantDomain</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Tenant ID</div>
-                        <div class="detail-value">$currentTenantId</div>
+                        <div class="detail-value">$safeTenantId</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Assessment generated by</div>
-                        <div class="detail-value">$currentUserAccount</div>
+                        <div class="detail-value">$safeUserAccount</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Assessment run on</div>
-                        <div class="detail-value">$reportDate</div>
+                        <div class="detail-value">$safeReportDate</div>
                     </div>
                     <div class="detail-item">
                         <div class="detail-label">Version</div>
@@ -3747,17 +3819,23 @@ function Export-HtmlReport {
         $statusClass = "status-" + $result.Result.ToLower()
         $resultLower = $result.Result.ToLower()
         $levelValue = $result.ProfileLevel
+        $safeControlNumber = Get-HtmlEncoded $result.ControlNumber
+        $safeControlTitle = Get-HtmlEncoded $result.ControlTitle
+        $safeDetails = Get-HtmlEncoded $result.Details
+        $safeRemediation = Get-HtmlEncoded $result.Remediation
+        $safeResult = Get-HtmlEncoded $result.Result
+        $safeLevel = Get-HtmlEncoded $result.ProfileLevel
         $html += @"
             <tr data-result="$resultLower" data-level="$levelValue">
-                <td><strong>$($result.ControlNumber)</strong></td>
-                <td>$($result.ControlTitle)</td>
-                <td>$($result.ProfileLevel)</td>
-                <td class="$statusClass">$($result.Result)</td>
+                <td><strong>$safeControlNumber</strong></td>
+                <td>$safeControlTitle</td>
+                <td>$safeLevel</td>
+                <td class="$statusClass">$safeResult</td>
                 <td>
-                    <div class="details">$($result.Details)</div>
+                    <div class="details">$safeDetails</div>
 "@
         if ($result.Remediation -and $result.Result -eq "Fail") {
-            $html += "                    <div class='remediation'>Remediation: $($result.Remediation)</div>`n"
+            $html += "                    <div class='remediation'>Remediation: $safeRemediation</div>`n"
         }
         $html += "                </td>`n            </tr>`n"
     }
@@ -3791,7 +3869,7 @@ function Export-HtmlReport {
 
         <!-- Footer -->
         <div class="footer">
-            <p><strong>CIS Microsoft 365 Foundations Benchmark v6.0.0</strong> | Generated $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") | $Script:TotalControls controls | Run by: $currentUserAccount</p>
+            <p><strong>CIS Microsoft 365 Foundations Benchmark v6.0.0</strong> | Generated $(Get-Date -Format "yyyy-MM-dd HH:mm:ss") | $Script:TotalControls controls | Run by: $safeUserAccount</p>
         </div>
     </div>
 
@@ -3929,6 +4007,33 @@ function Export-CsvReport {
 #region Main Execution
 
 function Start-ComplianceCheck {
+    # Reset all script-scope variables to prevent state leaking from previous runs
+    $Script:Results = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $Script:TotalControls = 0
+    $Script:PassedControls = 0
+    $Script:FailedControls = 0
+    $Script:ManualControls = 0
+    $Script:ErrorControls = 0
+    $Script:L1TotalControls = 0
+    $Script:L1PassedControls = 0
+    $Script:L1FailedControls = 0
+    $Script:L1ManualControls = 0
+    $Script:L2TotalControls = 0
+    $Script:L2PassedControls = 0
+    $Script:L2FailedControls = 0
+    $Script:L2ManualControls = 0
+
+    # Initialize file-based audit log
+    $logTimestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $Script:LogFilePath = Join-Path -Path $OutputPath -ChildPath "CIS-M365-Audit_$logTimestamp.log"
+    try {
+        $null = New-Item -Path $Script:LogFilePath -ItemType File -Force
+    }
+    catch {
+        Write-Warning "Could not create log file at $($Script:LogFilePath). File logging disabled."
+        $Script:LogFilePath = $null
+    }
+
     Write-Host "`n"
     Write-Host "================================================================" -ForegroundColor Cyan
     Write-Host "  CIS Microsoft 365 Foundations Benchmark v6.0.0" -ForegroundColor Cyan
@@ -4048,13 +4153,19 @@ function Start-ComplianceCheck {
         Write-Host "$Script:L2PassedControls passed / $Script:L2TotalControls total ($l2Rate%)" -ForegroundColor White
     }
 
+    # Log final summary to audit log
+    Write-Log "Compliance check complete - Total: $($Script:TotalControls), Pass: $($Script:PassedControls), Fail: $($Script:FailedControls), Manual: $($Script:ManualControls), Error: $($Script:ErrorControls)" -Level Info
+
     Write-Host "`n"
     Write-Host "Reports saved to:" -ForegroundColor Cyan
     Write-Host "  HTML: $htmlReport" -ForegroundColor White
     Write-Host "  CSV:  $csvReport" -ForegroundColor White
+    if ($Script:LogFilePath) {
+        Write-Host "  Log:  $($Script:LogFilePath)" -ForegroundColor White
+    }
     Write-Host "`n"
 
-    # Disconnect
+    # Disconnect and clean up environment state
     Write-Log "Disconnecting from services..." -Level Info
     try {
         Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null
@@ -4064,6 +4175,11 @@ function Start-ComplianceCheck {
     }
     catch {
         # Ignore disconnect errors
+    }
+    finally {
+        # Clean up environment variables to prevent state leaking across sessions
+        if ($env:CIS_USE_DEVICE_CODE) { Remove-Item Env:\CIS_USE_DEVICE_CODE -ErrorAction SilentlyContinue }
+        if ($env:AZURE_IDENTITY_DISABLE_MULTITENANTAUTH) { Remove-Item Env:\AZURE_IDENTITY_DISABLE_MULTITENANTAUTH -ErrorAction SilentlyContinue }
     }
 
     Write-Log "Done!" -Level Success
