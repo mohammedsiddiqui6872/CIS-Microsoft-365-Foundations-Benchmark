@@ -205,7 +205,9 @@ function Connect-M365Services {
                                    "UserAuthenticationMethod.Read.All", "IdentityRiskyUser.Read.All", `
                                    "IdentityRiskEvent.Read.All", "Application.Read.All", `
                                    "Organization.Read.All", "User.Read.All", "Group.Read.All", `
-                                   "RoleManagement.Read.All", "Reports.Read.All" -NoWelcome -ErrorAction Stop
+                                   "RoleManagement.Read.All", "Reports.Read.All", `
+                                   "DeviceManagementConfiguration.Read.All", `
+                                   "DeviceManagementServiceConfig.Read.All" -NoWelcome -ErrorAction Stop
             Write-Log "Connected to Microsoft Graph" -Level Success
             $mgContext = Get-MgContext
         } else {
@@ -217,29 +219,23 @@ function Connect-M365Services {
 
         Write-Log "Using authenticated session for remaining services (TenantId: $tenantId)..." -Level Info
 
-        # Connect to Exchange Online using the same authenticated session
+        # Connect to Exchange Online (DisableWAM avoids window handle issues across all environments)
         Write-Log "Connecting to Exchange Online..." -Level Info
-        Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+        Connect-ExchangeOnline -ShowBanner:$false -DisableWAM -ErrorAction Stop
         Write-Log "Connected to Exchange Online" -Level Success
 
-        # Connect to SharePoint Online
+        # Connect to SharePoint Online (ModernAuth provides reliable browser-based auth)
         Write-Log "Connecting to SharePoint Online..." -Level Info
-        # Ensure SPO module is loaded with Windows PowerShell compatibility on PS 7+
         if ($PSVersionTable.PSVersion.Major -ge 7) {
             if (-not (Get-Module -Name "Microsoft.Online.SharePoint.PowerShell")) {
                 Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -WarningAction SilentlyContinue -DisableNameChecking -Force
             }
         }
-        if ($useDeviceAuth) {
-            Connect-SPOService -Url $SharePointAdminUrl -UseSystemBrowser $true -ErrorAction Stop
-        } else {
-            Connect-SPOService -Url $SharePointAdminUrl -ErrorAction Stop
-        }
+        Connect-SPOService -Url $SharePointAdminUrl -ModernAuth $true -ErrorAction Stop
         Write-Log "Connected to SharePoint Online" -Level Success
 
-        # Connect to Microsoft Teams using the same account
-        # Teams connection is non-fatal - if it fails, Section 8 checks will report errors
-        # but the remaining 8 sections will still run successfully
+        # Connect to Microsoft Teams
+        # Non-fatal - if it fails, Section 8 checks will report errors but all other sections proceed
         Write-Log "Connecting to Microsoft Teams..." -Level Info
         try {
             if ($useDeviceAuth) {
@@ -778,28 +774,44 @@ function Test-M365Defender {
         if ($null -eq $cachedMalwareFilterPolicy) { throw "MalwareFilterPolicy data unavailable" }
         $malwarePolicies = $cachedMalwareFilterPolicy
 
-        # Comprehensive list of dangerous file types
+        # Comprehensive list of dangerous file types per CIS Benchmark
         $requiredBlockedTypes = @('ace','ani','app','docm','exe','jar','reg','scr','vbe','vbs','xlsm')
         $allTypesBlocked = $false
+        $bestPolicyName = $null
+        $bestMissingTypes = $requiredBlockedTypes  # Start with all types missing
 
         foreach ($policy in $malwarePolicies) {
-            if ($policy.FileTypes) {
-                $missingTypes = $requiredBlockedTypes | Where-Object { $policy.FileTypes -notcontains $_ }
+            if ($policy.EnableFileFilter -eq $true -and $policy.FileTypes) {
+                $missingTypes = @($requiredBlockedTypes | Where-Object { $policy.FileTypes -notcontains $_ })
                 if ($missingTypes.Count -eq 0) {
                     $allTypesBlocked = $true
+                    $bestPolicyName = $policy.Name
                     break
+                }
+                # Track the policy with the fewest missing types for better diagnostics
+                if ($missingTypes.Count -lt $bestMissingTypes.Count) {
+                    $bestMissingTypes = $missingTypes
+                    $bestPolicyName = $policy.Name
                 }
             }
         }
 
         if ($allTypesBlocked) {
             Add-Result -ControlNumber "2.1.11" -ControlTitle "Ensure comprehensive attachment filtering is applied" `
-                       -ProfileLevel "L2" -Result "Pass" -Details "Comprehensive attachment filtering configured"
+                       -ProfileLevel "L2" -Result "Pass" -Details "Comprehensive attachment filtering configured in policy '$bestPolicyName'"
         }
         else {
+            $policyCount = @($malwarePolicies).Count
+            $policiesWithFilter = @($malwarePolicies | Where-Object { $_.EnableFileFilter -eq $true }).Count
+            if ($policiesWithFilter -eq 0) {
+                $failDetails = "No malware filter policies have the file filter enabled ($policyCount policies found). Required blocked types: $($requiredBlockedTypes -join ', ')"
+            }
+            else {
+                $failDetails = "No policy blocks all required types. Checked $policyCount policies ($policiesWithFilter with file filter enabled). Missing types in best policy '$bestPolicyName': $($bestMissingTypes -join ', ')"
+            }
             Add-Result -ControlNumber "2.1.11" -ControlTitle "Ensure comprehensive attachment filtering is applied" `
-                       -ProfileLevel "L2" -Result "Fail" -Details "Comprehensive attachment filtering not fully configured" `
-                       -Remediation "Block all dangerous file types in malware filter policy"
+                       -ProfileLevel "L2" -Result "Fail" -Details $failDetails `
+                       -Remediation "Enable the Common Attachment Types Filter and ensure all dangerous file types are blocked: $($requiredBlockedTypes -join ', ')"
         }
     }
     catch {
@@ -2083,8 +2095,16 @@ function Test-EntraID {
         }
     }
     catch {
-        Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
-                   -ProfileLevel "L1" -Result "Error" -Details "Error: $_"
+        $errMsg = "$_"
+        if ($errMsg -match "AuditLog.Read.All|Authentication_MSGraphPermissionMissing|403|Forbidden") {
+            Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
+                       -ProfileLevel "L1" -Result "Error" -Details "Missing required permission: AuditLog.Read.All. Ensure admin consent is granted for this scope in Entra ID > Enterprise Applications > Microsoft Graph > Permissions." `
+                       -Remediation "Grant admin consent for AuditLog.Read.All scope, then re-authenticate with Connect-CISBenchmark"
+        }
+        else {
+            Add-Result -ControlNumber "5.2.3.4" -ControlTitle "Ensure all member users are 'MFA capable'" `
+                       -ProfileLevel "L1" -Result "Error" -Details "Error: $errMsg"
+        }
     }
 
     # 5.2.3.5 - Ensure weak authentication methods are disabled
@@ -2913,8 +2933,18 @@ function Test-MicrosoftTeams {
     # Pre-fetch shared data for this section
     $cachedTeamsMeetingPolicy = $null
     $cachedTenantFedConfig = $null
-    try { $cachedTeamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global } catch { Write-Log "Warning: Could not retrieve Teams meeting policy. Related checks will report errors." -Level Warning }
-    try { $cachedTenantFedConfig = Get-CsTenantFederationConfiguration } catch { Write-Log "Warning: Could not retrieve tenant federation configuration. Related checks will report errors." -Level Warning }
+
+    # Ensure MicrosoftTeams ConfigAPI submodules are fully loaded
+    # The nested Microsoft.Teams.ConfigAPI.Cmdlets module may not auto-load in all contexts
+    Import-Module MicrosoftTeams -Force -ErrorAction SilentlyContinue
+
+    try { $cachedTeamsMeetingPolicy = Get-CsTeamsMeetingPolicy -Identity Global -ErrorAction Stop } catch { Write-Log "Warning: Could not retrieve Teams meeting policy: $_" -Level Warning }
+    try {
+        $cachedTenantFedConfig = Get-CsTenantFederationConfiguration -ErrorAction Stop
+    }
+    catch {
+        Write-Log "Warning: Could not retrieve tenant federation configuration: $_" -Level Warning
+    }
 
     # 8.1.1 - Ensure external file sharing in Teams is enabled for only approved cloud storage services
     try {

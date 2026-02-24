@@ -217,7 +217,9 @@ function Connect-CISBenchmark {
             "RoleManagement.Read.All",
             "User.Read.All",
             "Group.Read.All",
-            "Application.Read.All"
+            "Application.Read.All",
+            "DeviceManagementConfiguration.Read.All",
+            "DeviceManagementServiceConfig.Read.All"
         ),
 
         [switch]$UseDeviceCode
