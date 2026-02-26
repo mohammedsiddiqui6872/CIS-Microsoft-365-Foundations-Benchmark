@@ -76,12 +76,6 @@ Install-Module -Name CIS-M365-Benchmark -Scope CurrentUser
 Update-Module -Name CIS-M365-Benchmark
 ```
 
-### Support This Project
-
-If this toolkit has helped improve your security compliance, consider supporting its development:
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support%20This%20Project-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
-
 ## Prerequisites
 
 ### Required PowerShell Modules
@@ -242,8 +236,6 @@ For issues, questions, or suggestions:
 - [Open an Issue](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/issues)
 - [Start a Discussion](https://github.com/mohammedsiddiqui6872/CIS-Microsoft-365-Foundations-Benchmark/discussions)
 - [PowerShellNerd](https://powershellnerd.com)
-
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-yellow.svg?style=for-the-badge&logo=buy-me-a-coffee)](https://buymeacoffee.com/mohammedsiddiqui)
 
 ---
 
