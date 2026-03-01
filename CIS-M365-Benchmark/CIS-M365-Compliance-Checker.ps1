@@ -1444,7 +1444,7 @@ function Test-EntraID {
         else {
             Add-Result -ControlNumber "5.1.6.3" -ControlTitle "Ensure guest user invitations are limited to the Guest Inviter role" `
                        -ProfileLevel "L2" -Result "Fail" -Details "Guest invitations too permissive: $($authPolicy.AllowInvitesFrom)" `
-                       -Remediation "Set-MgPolicyAuthorizationPolicy -AllowInvitesFrom adminsAndGuestInviters (or adminsOnly for more restrictive)"
+                       -Remediation "Update-MgPolicyAuthorizationPolicy -AllowInvitesFrom adminsAndGuestInviters (or adminsOnly for more restrictive)"
         }
     }
     catch {
