@@ -224,6 +224,7 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 - Thanks to ITEngineer-0815, M0nk3yOo, ozsaid, boscorelly, and Mateusz Jagiello for their contributions and issue reports
+- Special Thanks to **Mateusz Jagiello** For his relentless checks. 
 
 ---
 
