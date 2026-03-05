@@ -312,7 +312,11 @@ function Connect-M365Services {
 
         # ── Exchange Online ─────────────────────────────────────────────────
         Write-Log "Connecting to Exchange Online..." -Level Info
-        Connect-ExchangeOnline -ShowBanner:$false -DisableWAM -ErrorAction Stop
+        if ($useDeviceAuth) {
+            Connect-ExchangeOnline -ShowBanner:$false -Device -ErrorAction Stop
+        } else {
+            Connect-ExchangeOnline -ShowBanner:$false -DisableWAM -ErrorAction Stop
+        }
         Write-Log "Connected to Exchange Online" -Level Success
 
         # ── SharePoint Online ───────────────────────────────────────────────
@@ -322,7 +326,11 @@ function Connect-M365Services {
                 Import-Module Microsoft.Online.SharePoint.PowerShell -UseWindowsPowerShell -WarningAction SilentlyContinue -DisableNameChecking -Force
             }
         }
-        Connect-SPOService -Url $SharePointAdminUrl -ModernAuth $true -ErrorAction Stop
+        if ($useDeviceAuth) {
+            Connect-SPOService -Url $SharePointAdminUrl -ModernAuth $true -UseSystemBrowser -ErrorAction Stop
+        } else {
+            Connect-SPOService -Url $SharePointAdminUrl -ModernAuth $true -ErrorAction Stop
+        }
         Write-Log "Connected to SharePoint Online" -Level Success
 
         # ── Microsoft Teams ─────────────────────────────────────────────────
@@ -346,7 +354,11 @@ function Connect-M365Services {
         # ── Security & Compliance ───────────────────────────────────────────
         Write-Log "Connecting to Security & Compliance PowerShell..." -Level Info
         try {
-            Connect-IPPSSession -WarningAction SilentlyContinue -ErrorAction Stop
+            if ($useDeviceAuth) {
+                Connect-IPPSSession -Device -WarningAction SilentlyContinue -ErrorAction Stop
+            } else {
+                Connect-IPPSSession -WarningAction SilentlyContinue -ErrorAction Stop
+            }
             Write-Log "Connected to Security & Compliance PowerShell" -Level Success
             $Script:IPPSConnected = $true
         }
@@ -505,7 +517,24 @@ function Test-M365AdminCenter {
     try {
         Write-Log "Checking 1.1.4 - Admin account license footprint" -Level Info
 
-        $heavySkus = @("SPE_E3", "SPE_E5", "SPB", "ENTERPRISEPACK", "ENTERPRISEPREMIUM", "O365_BUSINESS_PREMIUM")
+        # Allowlist approach per CIS v6.0.0 guidance (page 30):
+        # Only these lightweight/admin-only SKUs are acceptable for admin accounts.
+        # Any SKU NOT in this list includes applications and should be flagged.
+        $allowedSkus = @(
+            "AAD_PREMIUM",           # Microsoft Entra ID P1
+            "AAD_PREMIUM_P2",        # Microsoft Entra ID P2
+            "INTUNE_A",              # Microsoft Intune Plan 1
+            "INTUNE_EDU",            # Microsoft Intune for Education
+            "EMSPREMIUM",            # Enterprise Mobility + Security E5
+            "EMS",                   # Enterprise Mobility + Security E3
+            "RIGHTSMANAGEMENT",       # Azure Information Protection Plan 1
+            "THREAT_INTELLIGENCE",    # Microsoft Defender for Office 365 P2
+            "ATP_ENTERPRISE",         # Microsoft Defender for Office 365 P1
+            "ATA",                   # Microsoft Defender for Identity
+            "ADALLOM_STANDALONE",     # Microsoft Defender for Cloud Apps
+            "IDENTITY_THREAT_PROTECTION" # Microsoft 365 E5 Security
+        )
+
         $allRoles1_1_4 = Get-MgDirectoryRole -All -ErrorAction Stop
         $adminRoles1_1_4 = $allRoles1_1_4 | Where-Object { $_.RoleTemplateId -notin $readOnlyRoleTemplateIds }
 
@@ -523,21 +552,21 @@ function Test-M365AdminCenter {
         $adminsWithHeavyLicenses = @()
         foreach ($userId in $adminUserIds) {
             $licenses = Get-MgUserLicenseDetail -UserId $userId -ErrorAction SilentlyContinue
-            $hasHeavySku = $licenses | Where-Object { $_.SkuPartNumber -in $heavySkus }
-            if ($hasHeavySku) {
+            $disallowedSkus = $licenses | Where-Object { $_.SkuPartNumber -notin $allowedSkus }
+            if ($disallowedSkus) {
                 $user = Get-MgUser -UserId $userId -Property UserPrincipalName -ErrorAction SilentlyContinue
-                $adminsWithHeavyLicenses += "$($user.UserPrincipalName) ($($hasHeavySku.SkuPartNumber -join ', '))"
+                $adminsWithHeavyLicenses += "$($user.UserPrincipalName) ($($disallowedSkus.SkuPartNumber -join ', '))"
             }
         }
 
         if ($adminsWithHeavyLicenses.Count -eq 0) {
             Add-Result -ControlNumber "1.1.4" -ControlTitle "Ensure administrative accounts use licenses with a reduced application footprint" `
-                       -ProfileLevel "L1" -Result "Pass" -Details "All $($adminUserIds.Count) admin accounts use reduced license footprint"
+                       -ProfileLevel "L1" -Result "Pass" -Details "All $($adminUserIds.Count) admin accounts use only reduced-footprint licenses"
         }
         else {
             Add-Result -ControlNumber "1.1.4" -ControlTitle "Ensure administrative accounts use licenses with a reduced application footprint" `
-                       -ProfileLevel "L1" -Result "Fail" -Details "Admins with full-suite licenses: $($adminsWithHeavyLicenses -join '; ')" `
-                       -Remediation "Assign minimal licenses (e.g., Entra ID P2 only) to administrative accounts instead of E3/E5/Business Premium"
+                       -ProfileLevel "L1" -Result "Fail" -Details "Admins with application-bearing licenses: $($adminsWithHeavyLicenses -join '; ')" `
+                       -Remediation "Assign only lightweight licenses (Entra ID P1/P2, EMS, Intune, Defender) to admin accounts. Remove any SKU that includes M365 apps (E3, E5, Business Premium, F-series, etc.)"
         }
     }
     catch {
